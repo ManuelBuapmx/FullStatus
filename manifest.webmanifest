@@ -1,0 +1,18 @@
+{
+  "name": "FullStatus",
+  "short_name": "FullStatus",
+  "description": "Registro institucional de asistencia",
+  "lang": "es-MX",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "FS.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

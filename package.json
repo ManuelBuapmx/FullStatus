@@ -1,0 +1,58 @@
+{
+  "name": "fullstatus",
+  "version": "1.0.0",
+  "description": "Registro institucional de asistencia",
+  "main": "electron-main.cjs",
+  "scripts": {
+    "start:web": "node server.cjs",
+    "start:windows": "electron .",
+    "dist:windows": "electron-builder --win nsis --x64",
+    "test": "echo \"No tests configured\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "electron": "^37.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.prismalmesh.fullstatus",
+    "productName": "FullStatus",
+    "files": [
+      "electron-main.cjs",
+      "index.html",
+      "styles.css",
+      "app.js",
+      "manifest.webmanifest",
+      "server.cjs",
+      "FullStatus.png",
+      "FS.png",
+      "Logo Cuadrado.jfif",
+      "package.json",
+      "www/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "FS.png"
+    },
+    "portable": {
+      "artifactName": "FullStatus-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "FullStatus"
+    }
+  }
+}

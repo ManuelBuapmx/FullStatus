@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FullStatus</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="launch-screen" aria-hidden="true">
+  <img src="FullStatus.png" alt="FullStatus">
+</div>
+
+<main id="app">
+  <header class="top">
+    <div>
+      <h1 class="brand-lockup">
+        <img class="brand-mark" src="FS.png" alt="">
+        <span>FullStatus</span>
+      </h1>
+      <div class="subtitle">Organiza tus grupos y registra la asistencia</div>
+    </div>
+    <div class="conn" aria-live="polite">
+      <span class="dot" id="connIndicator"></span>
+      <span id="connText"></span>
+    </div>
+  </header>
+
+<nav class="tabs">
+  <button data-tab="grupos" id="tabBtnGrupos">Grupos</button>
+  <button data-tab="pasar" id="tabBtnPasar">Pasar lista</button>
+  <button data-tab="historial" id="tabBtnHistorial">Historial y exportar</button>
+</nav>
+
+<section class="panel" id="panelContent"></section>
+</main>
+
+<footer class="site-footer">FullStatus™ • Desarrollado por Prismal Mesh © 2026</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+<script src="https://accounts.google.com/gsi/client"></script>
+<script src="app.js"></script>
+</body>
+</html>
