@@ -12,6 +12,12 @@
 </head>
 <body>
 
+<script>
+  if (navigator.userAgent.includes("Electron")) {
+    document.documentElement.classList.add("is-electron");
+  }
+</script>
+
 <div class="launch-screen" aria-hidden="true">
   <img src="FullStatus.png" alt="FullStatus">
 </div>

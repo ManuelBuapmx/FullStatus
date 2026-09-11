@@ -587,16 +587,21 @@
 
       var fechas = {};
       var totalCol = -1;
+      var anchoFechaOriginal = null;
       for(var fechaCol=nameCol+1; fechaCol<=maxCol; fechaCol++){
         var headerValue = ws.getRow(headerRow).getCell(fechaCol).value;
         if(headerValue instanceof Date){
           var iso = headerValue.getFullYear() + "-" + String(headerValue.getMonth()+1).padStart(2,"0") + "-" + String(headerValue.getDate()).padStart(2,"0");
           fechas[fechaCol] = iso;
+          if(anchoFechaOriginal === null && ws.getColumn(fechaCol).width){
+            anchoFechaOriginal = ws.getColumn(fechaCol).width;
+          }
         } else if(normalizaEtiqueta(headerValue).indexOf("TOTAL") !== -1){
           totalCol = fechaCol;
           break;
         }
       }
+      if(anchoFechaOriginal === null) anchoFechaOriginal = 6;
       var fechasEstado = Object.keys(state.asistencias[grupo.id] || {}).sort();
       var ultimaColumnaFecha = Object.keys(fechas).reduce(function(maximo, col){ return Math.max(maximo, Number(col)); }, nameCol + 2);
       fechasEstado.forEach(function(iso){
@@ -607,7 +612,8 @@
         var headerCell = ws.getRow(headerRow).getCell(ultimaColumnaFecha);
         headerCell.value = excelFechaSerial(iso);
         headerCell.numFmt = "dd/mm/yyyy";
-        ws.getColumn(ultimaColumnaFecha).width = 6;
+        ws.getColumn(ultimaColumnaFecha).width = anchoFechaOriginal;
+        ws.getColumn(ultimaColumnaFecha).customWidth = true;
       });
 
       var estudiantesOrdenados = grupo.estudiantes.slice().sort(function(a, b){
@@ -632,7 +638,8 @@
       Object.keys(fechas).forEach(function(colText){
         var fechaCell = ws.getRow(headerRow).getCell(Number(colText));
         fechaCell.numFmt = "dd/mm/yyyy";
-        ws.getColumn(Number(colText)).width = 6;
+        ws.getColumn(Number(colText)).width = anchoFechaOriginal;
+        ws.getColumn(Number(colText)).customWidth = true;
       });
     });
 

@@ -28,7 +28,7 @@ body{
   min-width:320px;
 }
 button{font-family:inherit;touch-action:manipulation;}
-#app{width:min(calc(100% - 36px), 980px);margin:0 auto;padding:0 0 64px;}
+#app{width:calc(100% - 48px);margin:0 auto;padding:0 0 64px;}
 
 .launch-screen{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:var(--brand-primary);animation:launch-fade 1.4s ease forwards;pointer-events:none;}
 .launch-screen img{width:min(62vw, 300px);height:auto;object-fit:contain;}
@@ -36,7 +36,7 @@ button{font-family:inherit;touch-action:manipulation;}
 
 header.top{
   padding:24px clamp(18px, 4vw, 32px) 18px;
-  margin:0 calc((100% - min(calc(100vw - 36px), 980px)) / -2);
+  margin:0 -24px;
   background:var(--brand-primary);
   border-bottom:4px solid var(--brand-accent);
   display:flex;
@@ -58,6 +58,18 @@ header.top h1{
 header.top .subtitle{color:#cbd5e1;font-size:0.88rem;margin-top:4px;}
 .conn{display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#e2e8f0;white-space:nowrap;}
 .conn .dot{width:8px;height:8px;border-radius:50%;background:var(--presente);box-shadow:0 0 0 3px var(--accent-soft);}
+
+html.is-electron header.top{
+  -webkit-app-region:drag;
+  padding-right:150px;
+  min-height:48px;
+  padding-top:14px;
+  padding-bottom:14px;
+}
+html.is-electron header.top .brand-lockup,
+html.is-electron header.top .conn{
+  -webkit-app-region:no-drag;
+}
 .conn.offline .dot{background:var(--retardo);}
 
 nav.tabs{display:flex;gap:4px;margin-top:20px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
