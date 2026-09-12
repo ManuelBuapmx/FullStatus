@@ -106,6 +106,8 @@
   var pasarFecha = todayISO();
   var pasarIndex = null;
   var pasarViewMode = "card";
+  var pasarSegundaLista = null;
+  var pasarSegundaIndex = null;
   var histDesde = "";
   var histHasta = "";
   var plantillaExcel = null;
@@ -389,11 +391,18 @@
     html += '<div class="row" style="justify-content:space-between;">';
     html += renderSelectorGrupoPasar(g);
     html += '<div class="field" style="margin-bottom:0;"><label for="inputFechaLista">Fecha (dd/mm/aaaa)</label><input type="text" id="inputFechaLista" value="'+displayFecha(pasarFecha)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
-    html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
+    if(pasarViewMode !== "segunda"){
+      html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
+    }
     html += "</div></div>";
 
     if(pasarViewMode === "list"){
       html += renderPasarListaCompleta(g, bucket);
+      return html;
+    }
+
+    if(pasarViewMode === "segunda"){
+      html += renderSegundoPase(g, bucket);
       return html;
     }
 
@@ -411,6 +420,9 @@
       html += "</div>";
       html += '<p class="helptext">Cada 3 retardos se convierten en 1 falta.</p>';
       html += '<div class="row" style="justify-content:center;">';
+      if(counts.A > 0){
+        html += '<button class="btn" id="btnSegundoPase">Segundo pase: revisar faltas ('+counts.A+')</button>';
+      }
       html += '<button class="btn secondary" id="btnRevisarLista">Revisar y corregir</button>';
       html += '<button class="btn secondary" id="btnReiniciarLista">Empezar de nuevo</button>';
       html += "</div></div>";
@@ -429,7 +441,6 @@
     html += '<div class="botones-estado">';
     html += '<button class="btn-estado presente" data-marcar="P">Asistencia</button>';
     html += '<button class="btn-estado falta" data-marcar="A">Falta</button>';
-    html += '<button class="btn-estado retardo" data-marcar="R">Retardo</button>';
     html += "</div>";
     html += '<div class="fila-secundaria">';
     html += '<button class="link-sutil" id="btnAnterior" '+(pasarIndex===0?"disabled":"")+'>‹ Anterior</button>';
@@ -452,6 +463,63 @@
     });
     html += "</table></div>";
     return html;
+  }
+
+  function renderSegundoPase(g, bucket){
+    if(!pasarSegundaLista || pasarSegundaLista.length === 0){
+      var htmlVacio = '<div class="card completo">';
+      htmlVacio += "<h3>Sin faltas que revisar</h3>";
+      htmlVacio += '<p class="helptext">No hay estudiantes marcados con falta en esta fecha.</p>';
+      htmlVacio += '<div class="row" style="justify-content:center;">';
+      htmlVacio += '<button class="btn secondary" id="btnVolverResumen">Volver</button>';
+      htmlVacio += "</div></div>";
+      return htmlVacio;
+    }
+
+    if(pasarSegundaIndex >= pasarSegundaLista.length){
+      var counts = {P:0,A:0,R:0};
+      g.estudiantes.forEach(function(e){ var v=bucket[e.id]; if(v) counts[v]++; });
+      var faltasTotales = faltasEquivalentes(counts.A, counts.R);
+      var htmlFin = '<div class="card completo">';
+      htmlFin += "<h3>Segundo pase completo</h3>";
+      htmlFin += '<p class="helptext">'+esc(g.nombre)+' — '+displayFecha(pasarFecha)+'</p>';
+      htmlFin += '<div class="resumen-final">';
+      htmlFin += '<span><b style="color:var(--presente)">'+counts.P+'</b>presentes</span>';
+      htmlFin += '<span><b style="color:var(--falta)">'+faltasTotales+'</b>faltas equivalentes</span>';
+      htmlFin += '<span><b style="color:var(--retardo)">'+counts.R+'</b>retardos</span>';
+      htmlFin += "</div>";
+      htmlFin += '<p class="helptext">Cada 3 retardos se convierten en 1 falta.</p>';
+      htmlFin += '<div class="row" style="justify-content:center;">';
+      htmlFin += '<button class="btn secondary" id="btnRevisarLista">Revisar y corregir</button>';
+      htmlFin += '<button class="btn secondary" id="btnReiniciarLista">Empezar de nuevo</button>';
+      htmlFin += "</div></div>";
+      return htmlFin;
+    }
+
+    var estId = pasarSegundaLista[pasarSegundaIndex];
+    var est = g.estudiantes.find(function(e){ return e.id === estId; });
+    if(!est){
+      pasarSegundaIndex++;
+      return renderSegundoPase(g, bucket);
+    }
+    var pct = Math.round((pasarSegundaIndex / pasarSegundaLista.length) * 100);
+
+    var htmlTarjeta = '<div class="progreso">';
+    htmlTarjeta += '<div style="flex:1;"><div class="progreso-texto">Segundo pase — '+(pasarSegundaIndex+1)+' de '+pasarSegundaLista.length+'</div><div class="barra"><div class="barra-fill" style="width:'+pct+'%;"></div></div></div>';
+    htmlTarjeta += "</div>";
+
+    htmlTarjeta += '<div class="tarjeta">';
+    htmlTarjeta += '<div class="num-lista">Marcado como falta</div>';
+    htmlTarjeta += '<div class="nombre-grande">'+esc(est.nombre)+'</div>';
+    htmlTarjeta += '<div class="botones-estado">';
+    htmlTarjeta += '<button class="btn-estado retardo" data-marcar-segunda="R">Llegó (Retardo)</button>';
+    htmlTarjeta += '<button class="btn-estado falta" data-marcar-segunda="A">Sigue de falta</button>';
+    htmlTarjeta += "</div>";
+    htmlTarjeta += '<div class="fila-secundaria">';
+    htmlTarjeta += '<button class="link-sutil" id="btnAnteriorSegunda" '+(pasarSegundaIndex===0?"disabled":"")+'>‹ Anterior</button>';
+    htmlTarjeta += '<button class="link-sutil" id="btnSaltarSegunda">Omitir por ahora</button>';
+    htmlTarjeta += "</div></div>";
+    return htmlTarjeta;
   }
 
   // =========================================================
@@ -1187,6 +1255,8 @@
       state.grupoActivoId = selGrupoPasar.value;
       pasarIndex = null;
       pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
       saveState();
       render();
     });
@@ -1197,6 +1267,8 @@
       pasarFecha = fecha;
       pasarIndex = null;
       pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
       render();
     });
     var btnToggleVista = document.getElementById("btnToggleVista");
@@ -1218,10 +1290,41 @@
     if(btnAnterior) btnAnterior.addEventListener("click", function(){ if(pasarIndex>0){ pasarIndex--; render(); } });
     var btnSaltar = document.getElementById("btnSaltar");
     if(btnSaltar) btnSaltar.addEventListener("click", function(){ pasarIndex++; render(); });
+    var btnSegundoPase = document.getElementById("btnSegundoPase");
+    if(btnSegundoPase) btnSegundoPase.addEventListener("click", function(){
+      var g = grupoActivo();
+      var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+      pasarSegundaLista = g.estudiantes.filter(function(e){ return bucket[e.id] === "A"; }).map(function(e){ return e.id; });
+      pasarSegundaIndex = 0;
+      pasarViewMode = "segunda";
+      render();
+    });
+    document.querySelectorAll("[data-marcar-segunda]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+        var estId = pasarSegundaLista[pasarSegundaIndex];
+        bucket[estId] = btn.getAttribute("data-marcar-segunda");
+        pasarSegundaIndex++;
+        saveState(); render();
+      });
+    });
+    var btnAnteriorSegunda = document.getElementById("btnAnteriorSegunda");
+    if(btnAnteriorSegunda) btnAnteriorSegunda.addEventListener("click", function(){ if(pasarSegundaIndex>0){ pasarSegundaIndex--; render(); } });
+    var btnSaltarSegunda = document.getElementById("btnSaltarSegunda");
+    if(btnSaltarSegunda) btnSaltarSegunda.addEventListener("click", function(){ pasarSegundaIndex++; render(); });
+    var btnVolverResumen = document.getElementById("btnVolverResumen");
+    if(btnVolverResumen) btnVolverResumen.addEventListener("click", function(){ pasarViewMode = "card"; render(); });
     var btnRevisarLista = document.getElementById("btnRevisarLista");
     if(btnRevisarLista) btnRevisarLista.addEventListener("click", function(){ pasarViewMode = "list"; render(); });
     var btnReiniciarLista = document.getElementById("btnReiniciarLista");
-    if(btnReiniciarLista) btnReiniciarLista.addEventListener("click", function(){ pasarIndex = 0; render(); });
+    if(btnReiniciarLista) btnReiniciarLista.addEventListener("click", function(){
+      pasarIndex = 0;
+      pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
+      render();
+    });
     document.querySelectorAll("[data-chip]").forEach(function(chip){
       chip.addEventListener("click", function(){
         var g = grupoActivo();
