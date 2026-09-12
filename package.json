@@ -37,6 +37,7 @@
       "FS.png",
       "Logo Cuadrado.jfif",
       "package.json",
+      "vendor/**/*",
       "www/**/*"
     ],
     "win": {

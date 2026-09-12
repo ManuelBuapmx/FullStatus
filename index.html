@@ -50,8 +50,8 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
-<script src="https://accounts.google.com/gsi/client"></script>
+<script src="vendor/exceljs.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" onerror="console.warn('Google Identity Services no disponible sin conexión; las funciones de Drive quedarán deshabilitadas hasta que haya internet.')"></script>
 <script src="app.js"></script>
 </body>
 </html>
