@@ -89,6 +89,7 @@
       if(!state.grupos.length){
         var grupos = [], asistencias = {};
         plantillaExcel.worksheets.forEach(function(ws){
+          if(esHojaPlantilla(ws.name)) return;
           var datos = extraerGrupoDeHoja(ws), grupoId = uid();
           grupos.push({id:grupoId, nombre:ws.name, estudiantes:datos ? datos.estudiantes : [], materia:datos ? datos.materia : "", profesor:datos ? datos.profesor : ""});
           asistencias[grupoId] = datos ? datos.asistencias : {};
@@ -106,6 +107,8 @@
   var pasarFecha = todayISO();
   var pasarIndex = null;
   var pasarViewMode = "card";
+  var pasarSegundaLista = null;
+  var pasarSegundaIndex = null;
   var histDesde = "";
   var histHasta = "";
   var plantillaExcel = null;
@@ -158,6 +161,10 @@
   // =========================================================
   // GRUPOS
   // =========================================================
+  function botonActualizarDrive(){
+    return '<button class="btn" id="btnActualizarDrive">'+(driveFileId ? "Actualizar en Google Drive" : "Guardar en Google Drive")+'</button>';
+  }
+
   function renderGrupos(){
     var html = "";
 
@@ -166,6 +173,9 @@
     html += '<p class="helptext" style="margin-top:0;">El archivo se carga una vez y queda disponible en este dispositivo. Sin conexión, tus cambios se guardan localmente y se sincronizan al volver internet.</p>';
     html += '<button class="btn" id="btnCargarGoogle">Cargar archivo institucional desde Drive</button>';
     html += '<span id="cargarGoogleEstado" class="helptext" style="margin-left:10px;"></span>';
+    if(state.grupos.length){
+      html += '<div style="margin-top:10px;">' + botonActualizarDrive() + '</div>';
+    }
     html += "</div>";
 
     html += '<div class="card">';
@@ -226,6 +236,16 @@
   }
 
   // ---- Lectura de la plantilla institucional ----
+  var NOMBRE_HOJA_PLANTILLA = "plantilla";
+  function esHojaPlantilla(nombre){ return String(nombre||"").trim().toLowerCase() === NOMBRE_HOJA_PLANTILLA; }
+  function obtenerHojaPlantilla(wb){
+    return wb.worksheets.find(function(ws){ return esHojaPlantilla(ws.name); }) || null;
+  }
+  function columnaDesdeLetra(letra){
+    var resultado = 0;
+    for(var i=0; i<letra.length; i++){ resultado = resultado*26 + (letra.charCodeAt(i) - 64); }
+    return resultado;
+  }
   function normalizaEtiqueta(v){ return String(v==null?"":v).replace(/\s+/g,"").toUpperCase(); }
   function esEncabezadoAlumno(v){
     var etiqueta = normalizaEtiqueta(v);
@@ -327,6 +347,7 @@
           var importados = 0, estudiantesTotal = 0, omitidos = [];
           for(var i=0; i<wb.worksheets.length; i++){
             var ws = wb.worksheets[i];
+            if(esHojaPlantilla(ws.name)) continue;
             var datos = extraerGrupoDeHoja(ws);
             if(!datos){ omitidos.push(ws.name); continue; }
             var existente = state.grupos.find(function(g){ return g.nombre.trim().toLowerCase() === datos.nombre.trim().toLowerCase(); });
@@ -389,11 +410,19 @@
     html += '<div class="row" style="justify-content:space-between;">';
     html += renderSelectorGrupoPasar(g);
     html += '<div class="field" style="margin-bottom:0;"><label for="inputFechaLista">Fecha (dd/mm/aaaa)</label><input type="text" id="inputFechaLista" value="'+displayFecha(pasarFecha)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
-    html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
+    if(pasarViewMode !== "segunda"){
+      html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
+    }
+    html += botonActualizarDrive();
     html += "</div></div>";
 
     if(pasarViewMode === "list"){
       html += renderPasarListaCompleta(g, bucket);
+      return html;
+    }
+
+    if(pasarViewMode === "segunda"){
+      html += renderSegundoPase(g, bucket);
       return html;
     }
 
@@ -411,6 +440,9 @@
       html += "</div>";
       html += '<p class="helptext">Cada 3 retardos se convierten en 1 falta.</p>';
       html += '<div class="row" style="justify-content:center;">';
+      if(counts.A > 0){
+        html += '<button class="btn" id="btnSegundoPase">Segundo pase: revisar faltas ('+counts.A+')</button>';
+      }
       html += '<button class="btn secondary" id="btnRevisarLista">Revisar y corregir</button>';
       html += '<button class="btn secondary" id="btnReiniciarLista">Empezar de nuevo</button>';
       html += "</div></div>";
@@ -429,7 +461,6 @@
     html += '<div class="botones-estado">';
     html += '<button class="btn-estado presente" data-marcar="P">Asistencia</button>';
     html += '<button class="btn-estado falta" data-marcar="A">Falta</button>';
-    html += '<button class="btn-estado retardo" data-marcar="R">Retardo</button>';
     html += "</div>";
     html += '<div class="fila-secundaria">';
     html += '<button class="link-sutil" id="btnAnterior" '+(pasarIndex===0?"disabled":"")+'>‹ Anterior</button>';
@@ -454,6 +485,63 @@
     return html;
   }
 
+  function renderSegundoPase(g, bucket){
+    if(!pasarSegundaLista || pasarSegundaLista.length === 0){
+      var htmlVacio = '<div class="card completo">';
+      htmlVacio += "<h3>Sin faltas que revisar</h3>";
+      htmlVacio += '<p class="helptext">No hay estudiantes marcados con falta en esta fecha.</p>';
+      htmlVacio += '<div class="row" style="justify-content:center;">';
+      htmlVacio += '<button class="btn secondary" id="btnVolverResumen">Volver</button>';
+      htmlVacio += "</div></div>";
+      return htmlVacio;
+    }
+
+    if(pasarSegundaIndex >= pasarSegundaLista.length){
+      var counts = {P:0,A:0,R:0};
+      g.estudiantes.forEach(function(e){ var v=bucket[e.id]; if(v) counts[v]++; });
+      var faltasTotales = faltasEquivalentes(counts.A, counts.R);
+      var htmlFin = '<div class="card completo">';
+      htmlFin += "<h3>Segundo pase completo</h3>";
+      htmlFin += '<p class="helptext">'+esc(g.nombre)+' — '+displayFecha(pasarFecha)+'</p>';
+      htmlFin += '<div class="resumen-final">';
+      htmlFin += '<span><b style="color:var(--presente)">'+counts.P+'</b>presentes</span>';
+      htmlFin += '<span><b style="color:var(--falta)">'+faltasTotales+'</b>faltas equivalentes</span>';
+      htmlFin += '<span><b style="color:var(--retardo)">'+counts.R+'</b>retardos</span>';
+      htmlFin += "</div>";
+      htmlFin += '<p class="helptext">Cada 3 retardos se convierten en 1 falta.</p>';
+      htmlFin += '<div class="row" style="justify-content:center;">';
+      htmlFin += '<button class="btn secondary" id="btnRevisarLista">Revisar y corregir</button>';
+      htmlFin += '<button class="btn secondary" id="btnReiniciarLista">Empezar de nuevo</button>';
+      htmlFin += "</div></div>";
+      return htmlFin;
+    }
+
+    var estId = pasarSegundaLista[pasarSegundaIndex];
+    var est = g.estudiantes.find(function(e){ return e.id === estId; });
+    if(!est){
+      pasarSegundaIndex++;
+      return renderSegundoPase(g, bucket);
+    }
+    var pct = Math.round((pasarSegundaIndex / pasarSegundaLista.length) * 100);
+
+    var htmlTarjeta = '<div class="progreso">';
+    htmlTarjeta += '<div style="flex:1;"><div class="progreso-texto">Segundo pase — '+(pasarSegundaIndex+1)+' de '+pasarSegundaLista.length+'</div><div class="barra"><div class="barra-fill" style="width:'+pct+'%;"></div></div></div>';
+    htmlTarjeta += "</div>";
+
+    htmlTarjeta += '<div class="tarjeta">';
+    htmlTarjeta += '<div class="num-lista">Marcado como falta</div>';
+    htmlTarjeta += '<div class="nombre-grande">'+esc(est.nombre)+'</div>';
+    htmlTarjeta += '<div class="botones-estado">';
+    htmlTarjeta += '<button class="btn-estado retardo" data-marcar-segunda="R">Llegó (Retardo)</button>';
+    htmlTarjeta += '<button class="btn-estado falta" data-marcar-segunda="A">Sigue de falta</button>';
+    htmlTarjeta += "</div>";
+    htmlTarjeta += '<div class="fila-secundaria">';
+    htmlTarjeta += '<button class="link-sutil" id="btnAnteriorSegunda" '+(pasarSegundaIndex===0?"disabled":"")+'>‹ Anterior</button>';
+    htmlTarjeta += '<button class="link-sutil" id="btnSaltarSegunda">Omitir por ahora</button>';
+    htmlTarjeta += "</div></div>";
+    return htmlTarjeta;
+  }
+
   // =========================================================
   // HISTORIAL
   // =========================================================
@@ -461,7 +549,8 @@
     var g = grupoActivo();
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
 
-    var fechas = fechasDelGrupo(g.id).filter(function(f){
+    var todasFechas = fechasDelGrupo(g.id);
+    var fechas = todasFechas.filter(function(f){
       if(histDesde && f < histDesde) return false;
       if(histHasta && f > histHasta) return false;
       return true;
@@ -497,6 +586,7 @@
 
     if(fechas.length === 0 || g.estudiantes.length === 0){
       html += '<p class="empty">Todavía no hay registros de asistencia'+(fechas.length===0?" en este rango de fechas":"")+'.</p></div>';
+      html += renderEditorFechas(g, todasFechas);
       return html;
     }
 
@@ -518,9 +608,30 @@
     html += '<div class="hist-actions">';
     html += '<button class="btn" id="btnCopiarExcel">Copiar para pegar en Excel</button>';
     html += '<button class="btn secondary" id="btnDescargarXlsx">Descargar Excel institucional</button>';
-    html += '<button class="btn" id="btnActualizarDrive">'+(driveFileId ? "Actualizar en Google Drive" : "Guardar en Google Drive")+'</button>';
+    html += botonActualizarDrive();
     html += "</div>";
     html += '<p class="helptext">La primera vez se guarda el archivo institucional en Drive. Después, "Actualizar en Google Drive" modifica ese mismo archivo.</p>';
+    html += "</div>";
+    html += renderEditorFechas(g, todasFechas);
+    return html;
+  }
+
+  function renderEditorFechas(g, todasFechas){
+    if(todasFechas.length === 0) return "";
+    var html = '<div class="card">';
+    html += "<h2>Editar o eliminar una fecha</h2>";
+    html += '<p class="helptext" style="margin-top:0;">Corrige una fecha capturada por error o borra por completo el registro de un día.</p>';
+    html += '<div class="field"><label for="selFechaEditar">Fecha registrada</label><select id="selFechaEditar">';
+    todasFechas.forEach(function(f){
+      html += '<option value="'+esc(f)+'">'+displayFecha(f)+'</option>';
+    });
+    html += "</select></div>";
+    html += '<div class="row">';
+    html += '<div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label for="inputFechaEditarNueva">Cambiar a esta fecha (dd/mm/aaaa)</label><input type="text" id="inputFechaEditarNueva" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
+    html += '<button class="btn secondary" id="btnCambiarFecha">Cambiar fecha</button>';
+    html += '<button class="btn danger" id="btnEliminarFecha">Eliminar esta fecha</button>';
+    html += "</div>";
+    html += '<p class="helptext">Eliminar quita las marcas de ese día en la app y las borra del Excel institucional en la próxima sincronización; no elimina físicamente la columna del archivo.</p>';
     html += "</div>";
     return html;
   }
@@ -569,107 +680,199 @@
     return limpio;
   }
 
-  function agregarHojaGrupoAlLibro(wb, grupo, usados){
-    var fechas = fechasDelGrupo(grupo.id);
-    var ws = wb.addWorksheet(nombreHojaValido(grupo.nombre, usados));
-    var colorBanda = "FFCCCCCC", colorFecha = "FF92D050";
+  // Clona la hoja "Plantilla" completa (logo, estilos, combinaciones, columnas
+  // Grupo/No. Equipo/Evaluación) para un grupo que todavía no tiene pestaña propia.
+  function clonarHojaDesdePlantilla(wb, nombreNuevo){
+    var plantilla = obtenerHojaPlantilla(wb);
+    if(!plantilla) return null;
+    var nueva = wb.addWorksheet(nombreNuevo);
 
-    ws.mergeCells(1,1,1,3+fechas.length);
-    var titulo = ws.getCell(1,1);
-    titulo.value = "LISTA - ACTA DE ASISTENCIA";
-    titulo.font = {name:"Arial", size:12, bold:true};
-    titulo.alignment = {horizontal:"center", vertical:"middle"};
+    var maxFila = Math.max(plantilla.rowCount, 50);
+    var maxColumna = Math.max(plantilla.columnCount, 50);
 
-    var filaMeta = 2;
-    ws.getCell(filaMeta,1).value = "Grupo:";
-    ws.getCell(filaMeta,1).font = {name:"Arial", size:10, bold:true};
-    ws.getCell(filaMeta,2).value = grupo.nombre;
-    ws.getCell(filaMeta,2).font = {name:"Arial", size:10};
-    if(grupo.materia){
-      ws.getCell(filaMeta,4).value = "Materia:";
-      ws.getCell(filaMeta,4).font = {name:"Arial", size:10, bold:true};
-      ws.getCell(filaMeta,5).value = grupo.materia;
-      ws.getCell(filaMeta,5).font = {name:"Arial", size:10};
-    }
-    if(grupo.profesor){
-      var filaProf = 3;
-      ws.getCell(filaProf,1).value = "Profesor:";
-      ws.getCell(filaProf,1).font = {name:"Arial", size:10, bold:true};
-      ws.getCell(filaProf,2).value = grupo.profesor;
-      ws.getCell(filaProf,2).font = {name:"Arial", size:10};
+    for(var c=1; c<=maxColumna; c++){
+      var colOrigen = plantilla.getColumn(c);
+      if(colOrigen && colOrigen.width) nueva.getColumn(c).width = colOrigen.width;
     }
 
-    var filaHeader = grupo.profesor ? 5 : 4;
-    var hNo = ws.getCell(filaHeader,1), hAlumno = ws.getCell(filaHeader,2);
-    hNo.value = "No."; hAlumno.value = "ALUMNO";
-    [hNo,hAlumno].forEach(function(c){ c.font={name:"Arial",size:10,bold:true}; c.alignment={horizontal:"center",vertical:"middle"}; });
-    hAlumno.alignment = {horizontal:"left", vertical:"middle"};
+    for(var r=1; r<=maxFila; r++){
+      var filaOrigen = plantilla.getRow(r);
+      var filaNueva = nueva.getRow(r);
+      for(var c2=1; c2<=maxColumna; c2++){
+        var celdaOrigen = filaOrigen.getCell(c2);
+        var celdaNueva = filaNueva.getCell(c2);
+        celdaNueva.value = celdaOrigen.value;
+        if(celdaOrigen.style) celdaNueva.style = JSON.parse(JSON.stringify(celdaOrigen.style));
+      }
+      if(filaOrigen.height) filaNueva.height = filaOrigen.height;
+    }
 
-    fechas.forEach(function(f, i){
-      var col = 3+i;
-      var cell = ws.getCell(filaHeader, col);
-      var partes = f.split("-").map(Number);
-      cell.value = new Date(partes[0], partes[1]-1, partes[2]);
-      cell.numFmt = "dd/mm/yyyy";
-      cell.font = {name:"Arial", size:9, bold:true};
-      cell.alignment = {horizontal:"center", vertical:"middle", textRotation:90};
-      cell.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorFecha}};
-    });
-    var hTotal = ws.getCell(filaHeader, 3+fechas.length);
-    hTotal.value = "Total presente";
-    hTotal.font = {name:"Arial", size:9, bold:true};
-    hTotal.alignment = {horizontal:"center", vertical:"middle", wrapText:true};
-
-    grupo.estudiantes.forEach(function(est, i){
-      var fila = filaHeader + 1 + i;
-      var bandear = i % 2 === 0;
-      var celdaNo = ws.getCell(fila,1), celdaNombre = ws.getCell(fila,2);
-      celdaNo.value = i+1;
-      celdaNombre.value = est.nombre;
-      [celdaNo, celdaNombre].forEach(function(c){
-        c.font = {name:"Arial", size:10};
-        if(bandear) c.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-      });
-      celdaNo.alignment = {horizontal:"center"};
-      var totalP = 0;
-      fechas.forEach(function(f, j){
-        var v = (state.asistencias[grupo.id][f] || {})[est.id] || "";
-        var col = 3+j;
-        var c = ws.getCell(fila, col);
-        if(v){ c.value = ESTADO_VALOR_EXPORT[v]; if(v==="P") totalP++; }
-        c.font = {name:"Arial", size:10};
-        c.alignment = {horizontal:"center"};
-        if(bandear) c.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-      });
-      var cTotal = ws.getCell(fila, 3+fechas.length);
-      cTotal.value = totalP;
-      cTotal.font = {name:"Arial", size:10, bold:true};
-      cTotal.alignment = {horizontal:"center"};
-      if(bandear) cTotal.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
+    ((plantilla.model && plantilla.model.merges) || []).forEach(function(rango){
+      try{ nueva.mergeCells(rango); }catch(e){}
     });
 
-    ws.getColumn(1).width = 5;
-    ws.getColumn(2).width = 34;
-    for(var k=0;k<fechas.length;k++) ws.getColumn(3+k).width = 4;
-    ws.getColumn(3+fechas.length).width = 10;
-    ws.getRow(filaHeader).height = 46;
+    if(plantilla.getImages){
+      plantilla.getImages().forEach(function(img){
+        try{ nueva.addImage(img.imageId, img.range); }catch(e){}
+      });
+    }
+
+    return nueva;
+  }
+
+  // Detecta hasta qué columna llega el bloque "ASISTENCIAS" (a partir de su
+  // combinación de celdas) para nunca escribir fechas nuevas dentro de "EVALUACIÓN".
+  function limiteColumnaAsistencias(ws, headerRow, nameCol, maxCol){
+    var filaBanner = headerRow - 1;
+    if(filaBanner < 1) return null;
+    for(var c=nameCol+1; c<=maxCol; c++){
+      var celda = ws.getRow(filaBanner).getCell(c);
+      if(normalizaEtiqueta(celda.value).indexOf("ASISTENCIA") !== -1){
+        var direccion = celda.address;
+        var merges = (ws.model && ws.model.merges) || [];
+        for(var i=0; i<merges.length; i++){
+          var partes = merges[i].split(":");
+          if(partes[0] === direccion){
+            var colLetra = partes[1].match(/[A-Z]+/);
+            if(colLetra) return columnaDesdeLetra(colLetra[0]);
+          }
+        }
+        return c;
+      }
+    }
+    return null;
+  }
+
+  // Ubica la fila/columna del encabezado "ALUMNO" en una hoja institucional.
+  function encontrarEncabezadoAlumno(ws, maxRowBusqueda, maxColBusqueda){
+    var maxRow = Math.min(ws.rowCount, maxRowBusqueda || 60);
+    var maxCol = Math.min(ws.columnCount, maxColBusqueda || 70);
+    for(var r=1; r<=maxRow; r++){
+      for(var c=1; c<=maxCol; c++){
+        var etiqueta = normalizaEtiqueta(ws.getRow(r).getCell(c).value);
+        if(esEncabezadoAlumno(etiqueta)) return {headerRow:r, nameCol:c, maxCol:maxCol};
+      }
+    }
+    return null;
+  }
+
+  // Quita por completo una fecha de la hoja de un grupo: recorre hacia la
+  // izquierda todas las fechas posteriores (encabezado + las 32 filas de
+  // alumnos) para que no quede una columna vacía en medio de "ASISTENCIAS".
+  function eliminarFechaDeHoja(ws, headerRow, nameCol, maxCol, fechaISO){
+    var columnasFecha = [];
+    for(var c=nameCol+1; c<=maxCol; c++){
+      var v = ws.getRow(headerRow).getCell(c).value;
+      if(v instanceof Date){
+        var iso = v.getFullYear() + "-" + String(v.getMonth()+1).padStart(2,"0") + "-" + String(v.getDate()).padStart(2,"0");
+        columnasFecha.push({col:c, iso:iso});
+      }
+    }
+    var idx = columnasFecha.findIndex(function(cf){ return cf.iso === fechaISO; });
+    if(idx === -1) return false;
+
+    var maxFilaAlumno = headerRow + 32;
+    for(var i=idx+1; i<columnasFecha.length; i++){
+      var colOrigen = columnasFecha[i].col;
+      var colDestino = colOrigen - 1;
+      for(var fila=headerRow; fila<=maxFilaAlumno; fila++){
+        var celdaOrigen = ws.getRow(fila).getCell(colOrigen);
+        var celdaDestino = ws.getRow(fila).getCell(colDestino);
+        celdaDestino.value = celdaOrigen.value;
+        celdaDestino.numFmt = celdaOrigen.numFmt;
+      }
+    }
+    var ultimaColUsada = columnasFecha[columnasFecha.length - 1].col;
+    for(var fila2=headerRow; fila2<=maxFilaAlumno; fila2++){
+      ws.getRow(fila2).getCell(ultimaColUsada).value = null;
+    }
+    return true;
+  }
+
+  // Aplica eliminarFechaDeHoja sobre la hoja real del grupo en el archivo
+  // institucional cargado en memoria, y refresca la copia local en caché.
+  async function eliminarFechaDelExcelInstitucional(nombreGrupo, fechaISO){
+    if(!plantillaExcel) return;
+    var ws = plantillaExcel.worksheets.find(function(hoja){
+      return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === nombreGrupo.trim().toLowerCase();
+    });
+    if(!ws) return;
+    var encabezado = encontrarEncabezadoAlumno(ws, 60, 70);
+    if(!encabezado) return;
+    var eliminado = eliminarFechaDeHoja(ws, encabezado.headerRow, encabezado.nameCol, encabezado.maxCol, fechaISO);
+    if(!eliminado) return;
+    try{
+      var buffer = await plantillaExcel.xlsx.writeBuffer();
+      await guardarPlantillaLocal(buffer);
+    }catch(error){ console.error("No se pudo refrescar la copia local del archivo institucional", error); }
+  }
+
+  // Cambia el encabezado de una columna de fecha existente por otra fecha,
+  // sin mover columnas (solo se sustituye el valor del encabezado).
+  function renombrarFechaEnHoja(ws, headerRow, nameCol, maxCol, fechaVieja, fechaNueva){
+    for(var c=nameCol+1; c<=maxCol; c++){
+      var celda = ws.getRow(headerRow).getCell(c);
+      var v = celda.value;
+      if(v instanceof Date){
+        var iso = v.getFullYear() + "-" + String(v.getMonth()+1).padStart(2,"0") + "-" + String(v.getDate()).padStart(2,"0");
+        if(iso === fechaVieja){
+          celda.value = excelFechaSerial(fechaNueva);
+          celda.numFmt = "dd/mm/yyyy";
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async function renombrarFechaDelExcelInstitucional(nombreGrupo, fechaVieja, fechaNueva){
+    if(!plantillaExcel) return;
+    var ws = plantillaExcel.worksheets.find(function(hoja){
+      return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === nombreGrupo.trim().toLowerCase();
+    });
+    if(!ws) return;
+    var encabezado = encontrarEncabezadoAlumno(ws, 60, 70);
+    if(!encabezado) return;
+    var cambiado = renombrarFechaEnHoja(ws, encabezado.headerRow, encabezado.nameCol, encabezado.maxCol, fechaVieja, fechaNueva);
+    if(!cambiado) return;
+    try{
+      var buffer = await plantillaExcel.xlsx.writeBuffer();
+      await guardarPlantillaLocal(buffer);
+    }catch(error){ console.error("No se pudo refrescar la copia local del archivo institucional", error); }
   }
 
   async function crearBufferPlantillaInstitucional(){
-    plantillaExcel.worksheets.forEach(function(ws){
-      var grupo = state.grupos.find(function(g){ return g.nombre.trim().toLowerCase() === ws.name.trim().toLowerCase(); });
-      if(!grupo) return;
+    var usados = {};
+    plantillaExcel.worksheets.forEach(function(ws){ usados[ws.name] = true; });
+    var avisos = [], gruposNuevos = [];
 
-      var headerRow = -1, nameCol = -1, maxRow = Math.min(ws.rowCount, 60), maxCol = Math.min(ws.columnCount, 70);
-      for(var r=1; r<=maxRow && headerRow===-1; r++){
-        for(var c=1; c<=maxCol; c++){
-          var etiqueta = normalizaEtiqueta(ws.getRow(r).getCell(c).value);
-          if(esEncabezadoAlumno(etiqueta)){
-            headerRow = r; nameCol = c; break;
-          }
+    state.grupos.forEach(function(grupo){
+      var ws = plantillaExcel.worksheets.find(function(hoja){
+        return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === grupo.nombre.trim().toLowerCase();
+      });
+
+      if(!ws){
+        ws = clonarHojaDesdePlantilla(plantillaExcel, nombreHojaValido(grupo.nombre, usados));
+        if(!ws){
+          avisos.push('No se encontró la pestaña "Plantilla" en el archivo institucional; no se pudo crear la hoja de "'+grupo.nombre+'".');
+          return;
         }
+        gruposNuevos.push(grupo.nombre);
       }
-      if(headerRow === -1) return;
+
+      var encabezado = encontrarEncabezadoAlumno(ws, 60, 70);
+      if(!encabezado){
+        avisos.push('No se reconoció el formato de la hoja "'+ws.name+'"; no se actualizó.');
+        return;
+      }
+      var headerRow = encabezado.headerRow, nameCol = encabezado.nameCol, maxCol = encabezado.maxCol;
+
+      // Profesor y Materia viven siempre en la misma columna que la respuesta,
+      // 8 y 3 filas arriba del encabezado "ALUMNO" respectivamente. No se
+      // sobreescriben si el grupo no tiene el dato capturado en la app.
+      var colValor = nameCol + 7;
+      if(grupo.profesor && headerRow-8 >= 1) ws.getRow(headerRow-8).getCell(colValor).value = grupo.profesor;
+      if(grupo.materia && headerRow-3 >= 1) ws.getRow(headerRow-3).getCell(colValor).value = grupo.materia;
 
       var fechas = {};
       var totalCol = -1;
@@ -688,12 +891,17 @@
         }
       }
       if(anchoFechaOriginal === null) anchoFechaOriginal = 6;
+
+      var limiteAsistencia = limiteColumnaAsistencias(ws, headerRow, nameCol, maxCol);
       var fechasEstado = Object.keys(state.asistencias[grupo.id] || {}).sort();
       var ultimaColumnaFecha = Object.keys(fechas).reduce(function(maximo, col){ return Math.max(maximo, Number(col)); }, nameCol + 2);
+      var fechasOmitidas = [];
       fechasEstado.forEach(function(iso){
         var existe = Object.keys(fechas).some(function(col){ return fechas[col] === iso; });
         if(existe) return;
-        ultimaColumnaFecha++;
+        var siguiente = ultimaColumnaFecha + 1;
+        if(limiteAsistencia && siguiente > limiteAsistencia){ fechasOmitidas.push(iso); return; }
+        ultimaColumnaFecha = siguiente;
         fechas[ultimaColumnaFecha] = iso;
         var headerCell = ws.getRow(headerRow).getCell(ultimaColumnaFecha);
         headerCell.value = excelFechaSerial(iso);
@@ -701,6 +909,9 @@
         ws.getColumn(ultimaColumnaFecha).width = anchoFechaOriginal;
         ws.getColumn(ultimaColumnaFecha).customWidth = true;
       });
+      if(fechasOmitidas.length){
+        avisos.push('El grupo "'+grupo.nombre+'" ya no tiene columnas de asistencia libres en la plantilla; no se guardaron '+fechasOmitidas.length+' fecha(s).');
+      }
 
       var estudiantesOrdenados = grupo.estudiantes.slice().sort(function(a, b){
         return a.nombre.localeCompare(b.nombre, "es", {sensitivity:"base"});
@@ -710,7 +921,7 @@
         var filaAlumno = ws.getRow(rowNumber);
         filaAlumno.getCell(nameCol).value = est.nombre;
         if(nameCol > 0 && !filaAlumno.getCell(nameCol - 1).value){
-          filaAlumno.getCell(nameCol - 1).value = rowNumber - headerRow;
+          filaAlumno.getCell(nameCol - 1).value = indice + 1;
         }
         var totalP = 0;
         Object.keys(fechas).forEach(function(colText){
@@ -729,32 +940,24 @@
       });
     });
 
-    var usadosHojas = {};
-    plantillaExcel.worksheets.forEach(function(ws){ usadosHojas[ws.name] = true; });
-    var gruposSinHoja = [];
-    state.grupos.forEach(function(grupo){
-      var yaExiste = plantillaExcel.worksheets.some(function(ws){ return ws.name.trim().toLowerCase() === grupo.nombre.trim().toLowerCase(); });
-      if(yaExiste) return;
-      agregarHojaGrupoAlLibro(plantillaExcel, grupo, usadosHojas);
-      gruposSinHoja.push(grupo.nombre);
-    });
-    if(gruposSinHoja.length){
-      showToast("Se agregó una hoja nueva en el archivo institucional para: " + gruposSinHoja.join(", ") + ".");
+    if(gruposNuevos.length){
+      avisos.unshift("Se crearon en el archivo institucional las pestañas: " + gruposNuevos.join(", ") + ".");
     }
 
-    return await plantillaExcel.xlsx.writeBuffer();
+    var buffer = await plantillaExcel.xlsx.writeBuffer();
+    return { buffer: buffer, avisos: avisos };
   }
 
   async function descargarPlantillaInstitucional(){
-    var buffer = await crearBufferPlantillaInstitucional();
-    var blob = new Blob([buffer], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    var resultado = await crearBufferPlantillaInstitucional();
+    var blob = new Blob([resultado.buffer], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
     var url = URL.createObjectURL(blob);
     var link = document.createElement("a");
     link.href = url;
     link.download = "asistencia_institucional_" + todayISO() + ".xlsx";
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    showToast("Archivo institucional descargado sin cambiar su formato.");
+    showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional descargado con el formato original.");
   }
 
   function iniciarGoogleDrive(action){
@@ -814,6 +1017,7 @@
     plantillaExcel = workbook;
     var grupos = [], asistencias = {};
     workbook.worksheets.forEach(function(ws){
+      if(esHojaPlantilla(ws.name)) return;
       var datos = extraerGrupoDeHoja(ws);
       if(!datos){
         var grupoVacioId = uid();
@@ -861,6 +1065,7 @@
 
     for(var sheetIndex=0; sheetIndex<metadata.sheets.length; sheetIndex++){
       var title = metadata.sheets[sheetIndex].properties.title;
+      if(esHojaPlantilla(title)) continue;
       var range = encodeURIComponent("'"+title.replace(/'/g,"''")+"'!A1:ZZ500");
       var valuesResponse = await fetch("https://sheets.googleapis.com/v4/spreadsheets/"+encodeURIComponent(GOOGLE_SHEET_ID)+"/values/"+range, {
         headers: {Authorization:"Bearer "+accessToken}
@@ -956,6 +1161,7 @@
 
     for(var i=0; i<metadata.sheets.length; i++){
       var sheetProperties = metadata.sheets[i].properties, title = sheetProperties.title;
+      if(esHojaPlantilla(title)) continue;
       var grupo = state.grupos.find(function(g){ return normalizaNombre(g.nombre) === normalizaNombre(title); });
       if(!grupo) continue;
       matchedGroups++;
@@ -1022,9 +1228,6 @@
         if(totalCol !== -1) totalUpdates.push({range:"'"+title.replace(/'/g,"''")+"'!"+columnaA1(totalCol+1)+(row+1), values:[[totalPresent]]});
       });
     }
-    var nombresHojasSheet = metadata.sheets.map(function(s){ return normalizaNombre(s.properties.title); });
-    var gruposSinPestana = state.grupos.filter(function(g){ return nombresHojasSheet.indexOf(normalizaNombre(g.nombre)) === -1; }).map(function(g){ return g.nombre; });
-
     if(!matchedGroups) throw new Error("No se encontró la pestaña del grupo en Google Sheets");
     await aplicarEstructura(formatRequests);
     if(!totalUpdates.length) throw new Error("No hay alumnos o asistencias nuevas para guardar");
@@ -1037,11 +1240,7 @@
       throw new Error("No se pudieron guardar los alumnos en Google Sheets (HTTP "+updateResponse.status+"): "+updateDetail.slice(0,160));
     }
     localStorage.setItem(DRIVE_FILE_KEY, GOOGLE_SHEET_ID);
-    var mensajeSync = "Alumnos y asistencias actualizados en la hoja institucional.";
-    if(gruposSinPestana.length){
-      mensajeSync += " No se sincronizaron (sin pestaña con ese nombre en la hoja): " + gruposSinPestana.join(", ") + ".";
-    }
-    showToast(mensajeSync);
+    showToast("Alumnos y asistencias actualizados en la hoja institucional.");
     render();
   }
 
@@ -1062,12 +1261,12 @@
             state.asistencias = asistenciasLocales;
             state.grupoActivoId = grupoActivoLocal;
           }
-          var buffer = await crearBufferPlantillaInstitucional();
+          var resultado = await crearBufferPlantillaInstitucional();
           var upload = await fetch("https://www.googleapis.com/upload/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?uploadType=media", {
-            method:"PATCH", headers:{Authorization:"Bearer "+accessToken, "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, body:buffer
+            method:"PATCH", headers:{Authorization:"Bearer "+accessToken, "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, body:resultado.buffer
           });
           if(!upload.ok) throw new Error("No se pudo actualizar el Excel institucional");
-          showToast("Archivo institucional actualizado en Drive.");
+          showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional actualizado en Drive.");
           return true;
         }
       }
@@ -1083,7 +1282,6 @@
   function marcarSincronizado(){
     cambiosPendientes = false;
     localStorage.removeItem("listaAsistenciaCambiosPendientes_v1");
-    if(document.getElementById("connText")) updateConn();
   }
   function sincronizarPendientes(){
     if(!navigator.onLine || !cambiosPendientes) return;
@@ -1091,120 +1289,25 @@
       guardarEnGoogleDrive(accessToken).then(function(ok){ if(ok) marcarSincronizado(); });
     });
   }
-
-  async function descargarXlsxCompleto(){
-    if(plantillaExcel){
-      try{
-        await descargarPlantillaInstitucional();
-      }catch(err){
-        console.error(err);
-        showToast("No se pudo actualizar el archivo institucional.");
-      }
+  function autoSincronizarCambios(){
+    if(!cambiosPendientes) return;
+    if(!navigator.onLine){
+      showToast("Sin conexión: se guardó en este dispositivo y se subirá a Drive automáticamente cuando vuelva internet.");
       return;
     }
-    showToast("Generando archivo…");
-    var wb = new ExcelJS.Workbook();
-    var usados = {};
-    var colorBanda = "FFCCCCCC", colorFecha = "FF92D050";
+    sincronizarPendientes();
+  }
 
-    state.grupos.forEach(function(g){
-      var fechas = fechasDelGrupo(g.id);
-      var ws = wb.addWorksheet(nombreHojaValido(g.nombre, usados));
-
-      ws.mergeCells(1,1,1,3+fechas.length);
-      var titulo = ws.getCell(1,1);
-      titulo.value = "LISTA - ACTA DE ASISTENCIA";
-      titulo.font = {name:"Arial", size:12, bold:true};
-      titulo.alignment = {horizontal:"center", vertical:"middle"};
-
-      var filaMeta = 2;
-      ws.getCell(filaMeta,1).value = "Grupo:";
-      ws.getCell(filaMeta,1).font = {name:"Arial", size:10, bold:true};
-      ws.getCell(filaMeta,2).value = g.nombre;
-      ws.getCell(filaMeta,2).font = {name:"Arial", size:10};
-      if(g.materia){
-        ws.getCell(filaMeta,4).value = "Materia:";
-        ws.getCell(filaMeta,4).font = {name:"Arial", size:10, bold:true};
-        ws.getCell(filaMeta,5).value = g.materia;
-        ws.getCell(filaMeta,5).font = {name:"Arial", size:10};
-      }
-      if(g.profesor){
-        var filaProf = 3;
-        ws.getCell(filaProf,1).value = "Profesor:";
-        ws.getCell(filaProf,1).font = {name:"Arial", size:10, bold:true};
-        ws.getCell(filaProf,2).value = g.profesor;
-        ws.getCell(filaProf,2).font = {name:"Arial", size:10};
-      }
-
-      var filaHeader = g.profesor ? 5 : 4;
-      var hNo = ws.getCell(filaHeader,1), hAlumno = ws.getCell(filaHeader,2);
-      hNo.value = "No."; hAlumno.value = "ALUMNO";
-      [hNo,hAlumno].forEach(function(c){ c.font={name:"Arial",size:10,bold:true}; c.alignment={horizontal:"center",vertical:"middle"}; });
-      hAlumno.alignment = {horizontal:"left", vertical:"middle"};
-
-      fechas.forEach(function(f, i){
-        var col = 3+i;
-        var cell = ws.getCell(filaHeader, col);
-        var partes = f.split("-").map(Number);
-        cell.value = new Date(partes[0], partes[1]-1, partes[2]);
-        cell.numFmt = "dd/mm/yyyy";
-        cell.font = {name:"Arial", size:9, bold:true};
-        cell.alignment = {horizontal:"center", vertical:"middle", textRotation:90};
-        cell.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorFecha}};
-      });
-      var hTotal = ws.getCell(filaHeader, 3+fechas.length);
-      hTotal.value = "Total presente";
-      hTotal.font = {name:"Arial", size:9, bold:true};
-      hTotal.alignment = {horizontal:"center", vertical:"middle", wrapText:true};
-
-      g.estudiantes.forEach(function(est, i){
-        var fila = filaHeader + 1 + i;
-        var bandear = i % 2 === 0;
-        var celdaNo = ws.getCell(fila,1), celdaNombre = ws.getCell(fila,2);
-        celdaNo.value = i+1;
-        celdaNombre.value = est.nombre;
-        [celdaNo, celdaNombre].forEach(function(c){
-          c.font = {name:"Arial", size:10};
-          if(bandear) c.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-        });
-        celdaNo.alignment = {horizontal:"center"};
-        var totalP = 0;
-        fechas.forEach(function(f, j){
-          var v = (state.asistencias[g.id][f] || {})[est.id] || "";
-          var col = 3+j;
-          var c = ws.getCell(fila, col);
-          if(v){ c.value = ESTADO_VALOR_EXPORT[v]; if(v==="P") totalP++; }
-          c.font = {name:"Arial", size:10};
-          c.alignment = {horizontal:"center"};
-          if(bandear) c.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-        });
-        var cTotal = ws.getCell(fila, 3+fechas.length);
-        cTotal.value = totalP;
-        cTotal.font = {name:"Arial", size:10, bold:true};
-        cTotal.alignment = {horizontal:"center"};
-        if(bandear) cTotal.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-      });
-
-      ws.getColumn(1).width = 5;
-      ws.getColumn(2).width = 34;
-      for(var k=0;k<fechas.length;k++) ws.getColumn(3+k).width = 4;
-      ws.getColumn(3+fechas.length).width = 10;
-      ws.getRow(filaHeader).height = 46;
-    });
-
+  async function descargarXlsxCompleto(){
+    if(!plantillaExcel){
+      showToast('Primero carga el archivo institucional desde Google Drive (pestaña "Grupos") para exportar con el formato correcto.');
+      return;
+    }
     try{
-      var buf = await wb.xlsx.writeBuffer();
-      var blob = new Blob([buf], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = "asistencia_" + todayISO() + ".xlsx";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showToast("Archivo descargado.");
+      await descargarPlantillaInstitucional();
     }catch(err){
       console.error(err);
-      showToast("No se pudo generar el archivo de Excel.");
+      showToast("No se pudo actualizar el archivo institucional.");
     }
   }
 
@@ -1214,12 +1317,6 @@
   function attachHandlers(){
     var btnCargarGoogle = document.getElementById("btnCargarGoogle");
     if(btnCargarGoogle) btnCargarGoogle.addEventListener("click", function(){
-      if(state.grupos.length > 0){
-        var mensajeConfirmacion = cambiosPendientes
-          ? 'Tienes cambios de asistencia sin sincronizar en este dispositivo.\n\nSi cargas el archivo institucional ahora, se reemplazarán TODOS tus grupos y registros locales, y esos cambios pendientes se perderán.\n\n¿Deseas continuar de todas formas?'
-          : 'Esto reemplazará todos tus grupos y registros de asistencia actuales con lo que venga del archivo institucional.\n\n¿Deseas continuar?';
-        if(!confirm(mensajeConfirmacion)) return;
-      }
       iniciarGoogleDrive(function(accessToken){
         cargarGruposGoogle(accessToken).catch(function(err){
           console.error(err);
@@ -1300,6 +1397,8 @@
       state.grupoActivoId = selGrupoPasar.value;
       pasarIndex = null;
       pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
       saveState();
       render();
     });
@@ -1307,9 +1406,17 @@
     if(inputFecha) inputFecha.addEventListener("change", function(){
       var fecha = parseFechaMX(inputFecha.value);
       if(!fecha){ showToast("Escribe la fecha como dd/mm/aaaa."); render(); return; }
+      var g = grupoActivo();
+      var yaExiste = g && state.asistencias[g.id] && state.asistencias[g.id][fecha];
+      if(!yaExiste && g){
+        var confirmado = confirm('¿Agregar el '+displayFecha(fecha)+' como una nueva fecha de asistencia para "'+g.nombre+'"?');
+        if(!confirmado){ render(); return; }
+      }
       pasarFecha = fecha;
       pasarIndex = null;
       pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
       render();
     });
     var btnToggleVista = document.getElementById("btnToggleVista");
@@ -1324,17 +1431,61 @@
         var est = g.estudiantes[pasarIndex];
         bucket[est.id] = btn.getAttribute("data-marcar");
         pasarIndex++;
-        saveState(); render();
+        saveState();
+        if(pasarIndex >= g.estudiantes.length) autoSincronizarCambios();
+        render();
       });
     });
     var btnAnterior = document.getElementById("btnAnterior");
     if(btnAnterior) btnAnterior.addEventListener("click", function(){ if(pasarIndex>0){ pasarIndex--; render(); } });
     var btnSaltar = document.getElementById("btnSaltar");
-    if(btnSaltar) btnSaltar.addEventListener("click", function(){ pasarIndex++; render(); });
+    if(btnSaltar) btnSaltar.addEventListener("click", function(){
+      var g = grupoActivo();
+      pasarIndex++;
+      if(g && pasarIndex >= g.estudiantes.length) autoSincronizarCambios();
+      render();
+    });
+    var btnSegundoPase = document.getElementById("btnSegundoPase");
+    if(btnSegundoPase) btnSegundoPase.addEventListener("click", function(){
+      var g = grupoActivo();
+      var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+      pasarSegundaLista = g.estudiantes.filter(function(e){ return bucket[e.id] === "A"; }).map(function(e){ return e.id; });
+      pasarSegundaIndex = 0;
+      pasarViewMode = "segunda";
+      render();
+    });
+    document.querySelectorAll("[data-marcar-segunda]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+        var estId = pasarSegundaLista[pasarSegundaIndex];
+        bucket[estId] = btn.getAttribute("data-marcar-segunda");
+        pasarSegundaIndex++;
+        saveState();
+        if(pasarSegundaIndex >= pasarSegundaLista.length) autoSincronizarCambios();
+        render();
+      });
+    });
+    var btnAnteriorSegunda = document.getElementById("btnAnteriorSegunda");
+    if(btnAnteriorSegunda) btnAnteriorSegunda.addEventListener("click", function(){ if(pasarSegundaIndex>0){ pasarSegundaIndex--; render(); } });
+    var btnSaltarSegunda = document.getElementById("btnSaltarSegunda");
+    if(btnSaltarSegunda) btnSaltarSegunda.addEventListener("click", function(){
+      pasarSegundaIndex++;
+      if(pasarSegundaLista && pasarSegundaIndex >= pasarSegundaLista.length) autoSincronizarCambios();
+      render();
+    });
+    var btnVolverResumen = document.getElementById("btnVolverResumen");
+    if(btnVolverResumen) btnVolverResumen.addEventListener("click", function(){ pasarViewMode = "card"; render(); });
     var btnRevisarLista = document.getElementById("btnRevisarLista");
     if(btnRevisarLista) btnRevisarLista.addEventListener("click", function(){ pasarViewMode = "list"; render(); });
     var btnReiniciarLista = document.getElementById("btnReiniciarLista");
-    if(btnReiniciarLista) btnReiniciarLista.addEventListener("click", function(){ pasarIndex = 0; render(); });
+    if(btnReiniciarLista) btnReiniciarLista.addEventListener("click", function(){
+      pasarIndex = 0;
+      pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
+      render();
+    });
     document.querySelectorAll("[data-chip]").forEach(function(chip){
       chip.addEventListener("click", function(){
         var g = grupoActivo();
@@ -1367,6 +1518,41 @@
     });
     var btnLimpiarFiltro = document.getElementById("btnLimpiarFiltro");
     if(btnLimpiarFiltro) btnLimpiarFiltro.addEventListener("click", function(){ histDesde=""; histHasta=""; render(); });
+    var btnCambiarFecha = document.getElementById("btnCambiarFecha");
+    if(btnCambiarFecha) btnCambiarFecha.addEventListener("click", function(){
+      var g = grupoActivo();
+      var fechaVieja = document.getElementById("selFechaEditar").value;
+      var textoNueva = document.getElementById("inputFechaEditarNueva").value.trim();
+      if(!textoNueva){ showToast("Escribe la nueva fecha como dd/mm/aaaa."); return; }
+      var fechaNueva = parseFechaMX(textoNueva);
+      if(!fechaNueva){ showToast("Escribe la fecha como dd/mm/aaaa."); return; }
+      if(fechaNueva === fechaVieja){ showToast("Es la misma fecha."); return; }
+      if(state.asistencias[g.id][fechaNueva] && Object.keys(state.asistencias[g.id][fechaNueva]).length){
+        showToast("Ya existe el "+displayFecha(fechaNueva)+" con datos. Elimínalo primero si quieres reemplazarlo.");
+        return;
+      }
+      if(!confirm('¿Cambiar el '+displayFecha(fechaVieja)+' por el '+displayFecha(fechaNueva)+' en "'+g.nombre+'"?')) return;
+      state.asistencias[g.id][fechaNueva] = state.asistencias[g.id][fechaVieja];
+      delete state.asistencias[g.id][fechaVieja];
+      if(pasarFecha === fechaVieja) pasarFecha = fechaNueva;
+      saveState(); render();
+      renombrarFechaDelExcelInstitucional(g.nombre, fechaVieja, fechaNueva).then(function(){
+        showToast("Fecha actualizada a "+displayFecha(fechaNueva)+".");
+        autoSincronizarCambios();
+      });
+    });
+    var btnEliminarFecha = document.getElementById("btnEliminarFecha");
+    if(btnEliminarFecha) btnEliminarFecha.addEventListener("click", function(){
+      var g = grupoActivo();
+      var fecha = document.getElementById("selFechaEditar").value;
+      if(!confirm('¿Eliminar por completo el '+displayFecha(fecha)+' de "'+g.nombre+'"? Se recorrerán las fechas siguientes en el Excel institucional para no dejar columnas vacías. No se puede deshacer.')) return;
+      delete state.asistencias[g.id][fecha];
+      saveState(); render();
+      eliminarFechaDelExcelInstitucional(g.nombre, fecha).then(function(){
+        showToast("Fecha "+displayFecha(fecha)+" eliminada y columnas recorridas en el Excel.");
+        autoSincronizarCambios();
+      });
+    });
     var btnCopiarExcel = document.getElementById("btnCopiarExcel");
     if(btnCopiarExcel) btnCopiarExcel.addEventListener("click", function(){
       var rows = construirMatrizActiva();
