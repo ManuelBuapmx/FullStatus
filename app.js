@@ -30,13 +30,14 @@
     return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
 
-  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {} }; }
+  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {}, justificantes: {} }; }
   function loadState(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
       if(!raw) return defaultState();
       var parsed = JSON.parse(raw);
       if(!parsed.grupos) return defaultState();
+      if(!parsed.justificantes) parsed.justificantes = {};
       return parsed;
     }catch(e){ return defaultState(); }
   }
@@ -135,6 +136,19 @@
   }
   function fechasDelGrupo(grupoId){ return Object.keys(state.asistencias[grupoId] || {}).sort(); }
   function faltasEquivalentes(faltas, retardos){ return faltas + Math.floor(retardos / 3); }
+
+  function ensureJustificantesBucket(grupoId, fecha){
+    if(!state.justificantes[grupoId]) state.justificantes[grupoId] = {};
+    if(!state.justificantes[grupoId][fecha]) state.justificantes[grupoId][fecha] = {};
+    return state.justificantes[grupoId][fecha];
+  }
+  function esJustificada(grupoId, fecha, estudianteId){
+    return !!(state.justificantes[grupoId] && state.justificantes[grupoId][fecha] && state.justificantes[grupoId][fecha][estudianteId]);
+  }
+  function notaJustificante(grupoId, fecha, estudianteId){
+    var entrada = state.justificantes[grupoId] && state.justificantes[grupoId][fecha] && state.justificantes[grupoId][fecha][estudianteId];
+    return entrada ? (entrada.nota || "") : "";
+  }
 
   function showToast(msg){
     var t = document.getElementById("toast");
@@ -409,7 +423,7 @@
     var html = '<div class="card">';
     html += '<div class="row" style="justify-content:space-between;">';
     html += renderSelectorGrupoPasar(g);
-    html += '<div class="field" style="margin-bottom:0;"><label for="inputFechaLista">Fecha (dd/mm/aaaa)</label><input type="text" id="inputFechaLista" value="'+displayFecha(pasarFecha)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="inputFechaLista">Fecha</label><input type="date" id="inputFechaLista" value="'+pasarFecha+'"></div>';
     if(pasarViewMode !== "segunda"){
       html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
     }
@@ -555,11 +569,16 @@
       if(histHasta && f > histHasta) return false;
       return true;
     });
-    var resumen = {P:0, A:0, R:0};
+    var resumen = {P:0, A:0, R:0, J:0};
     fechas.forEach(function(fecha){
       Object.keys(state.asistencias[g.id][fecha] || {}).forEach(function(estudianteId){
         var estado = state.asistencias[g.id][fecha][estudianteId];
-        if(resumen[estado] !== undefined) resumen[estado]++;
+        if(estado === "A" && esJustificada(g.id, fecha, estudianteId)){
+          resumen.J++;
+          resumen.P++;
+        } else if(resumen[estado] !== undefined){
+          resumen[estado]++;
+        }
       });
     });
 
@@ -575,18 +594,20 @@
     html += '<div class="summary-P"><strong>'+resumen.P+'</strong><span> asistencias</span></div>';
     html += '<div class="summary-A"><strong>'+faltasEquivalentes(resumen.A, resumen.R)+'</strong><span> faltas equivalentes</span></div>';
     html += '<div class="summary-R"><strong>'+resumen.R+'</strong><span> retardos</span></div>';
+    html += '<div class="summary-J"><strong>'+resumen.J+'</strong><span> justificadas</span></div>';
     html += '</div>';
     html += '<div class="hist-toolbar">';
-    html += '<div class="field" style="margin-bottom:0;"><label for="histDesde">Desde (dd/mm/aaaa)</label><input type="text" id="histDesde" value="'+displayFecha(histDesde)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
-    html += '<div class="field" style="margin-bottom:0;"><label for="histHasta">Hasta (dd/mm/aaaa)</label><input type="text" id="histHasta" value="'+displayFecha(histHasta)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="histDesde">Desde</label><input type="date" id="histDesde" value="'+histDesde+'"></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="histHasta">Hasta</label><input type="date" id="histHasta" value="'+histHasta+'"></div>';
     html += '<button class="btn secondary" id="btnLimpiarFiltro">Quitar filtro</button>';
     html += "</div>";
-    html += '<div class="hist-legend"><span><b class="legend-P">1</b> Asistencia</span><span><b class="legend-A">0</b> Falta</span><span><b class="legend-R">2</b> Retardo</span></div>';
-    html += '<p class="helptext hist-rule">Cada 3 retardos se convierten en 1 falta equivalente.</p>';
+    html += '<div class="hist-legend"><span><b class="legend-P">1</b> Asistencia</span><span><b class="legend-A">0</b> Falta</span><span><b class="legend-R">2</b> Retardo</span><span><b class="legend-J">J</b> Falta justificada</span></div>';
+    html += '<p class="helptext hist-rule">Cada 3 retardos se convierten en 1 falta equivalente. Toca una falta ("0") en la tabla para marcarla como justificada.</p>';
 
     if(fechas.length === 0 || g.estudiantes.length === 0){
       html += '<p class="empty">Todavía no hay registros de asistencia'+(fechas.length===0?" en este rango de fechas":"")+'.</p></div>';
       html += renderEditorFechas(g, todasFechas);
+      html += renderJustificantes(g);
       return html;
     }
 
@@ -598,8 +619,12 @@
       var totalP = 0;
       fechas.forEach(function(f){
         var v = (state.asistencias[g.id][f] || {})[e.id] || "";
-        if(v==="P") totalP++;
-        html += '<td class="'+(v?"mark-"+v:"mark-empty")+'">'+(v?ESTADO_VALOR_EXPORT[v]:"–")+"</td>";
+        var justificada = v === "A" && esJustificada(g.id, f, e.id);
+        if(v==="P" || justificada) totalP++;
+        var clase = justificada ? "mark-J" : (v?"mark-"+v:"mark-empty");
+        var texto = justificada ? "J" : (v?ESTADO_VALOR_EXPORT[v]:"–");
+        var atributos = (v==="A") ? ' data-justificar data-estudiante="'+esc(e.id)+'" data-fecha="'+esc(f)+'" title="Tocar para '+(justificada?"quitar el justificante":"marcar como justificada")+'"' : '';
+        html += '<td class="'+clase+'"'+atributos+'>'+texto+"</td>";
       });
       html += "<td><b>"+totalP+"</b></td></tr>";
     });
@@ -613,6 +638,7 @@
     html += '<p class="helptext">La primera vez se guarda el archivo institucional en Drive. Después, "Actualizar en Google Drive" modifica ese mismo archivo.</p>';
     html += "</div>";
     html += renderEditorFechas(g, todasFechas);
+    html += renderJustificantes(g);
     return html;
   }
 
@@ -627,11 +653,39 @@
     });
     html += "</select></div>";
     html += '<div class="row">';
-    html += '<div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label for="inputFechaEditarNueva">Cambiar a esta fecha (dd/mm/aaaa)</label><input type="text" id="inputFechaEditarNueva" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
+    html += '<div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label for="inputFechaEditarNueva">Cambiar a esta fecha</label><input type="date" id="inputFechaEditarNueva"></div>';
     html += '<button class="btn secondary" id="btnCambiarFecha">Cambiar fecha</button>';
     html += '<button class="btn danger" id="btnEliminarFecha">Eliminar esta fecha</button>';
     html += "</div>";
     html += '<p class="helptext">Eliminar quita las marcas de ese día en la app y las borra del Excel institucional en la próxima sincronización; no elimina físicamente la columna del archivo.</p>';
+    html += "</div>";
+    return html;
+  }
+
+  function renderJustificantes(g){
+    var todasFechas = fechasDelGrupo(g.id);
+    if(todasFechas.length === 0) return "";
+    var lista = [];
+    var porFecha = state.justificantes[g.id] || {};
+    Object.keys(porFecha).sort().forEach(function(fecha){
+      Object.keys(porFecha[fecha]).forEach(function(estId){
+        var est = g.estudiantes.find(function(e){ return e.id === estId; });
+        if(!est) return;
+        lista.push({fecha:fecha, estudianteId:estId, nombre:est.nombre, nota:(porFecha[fecha][estId]||{}).nota || ""});
+      });
+    });
+    var html = '<div class="card">';
+    html += "<h2>Justificantes</h2>";
+    html += '<p class="helptext" style="margin-top:0;">Toca una falta ("0") en la tabla de arriba para marcarla como justificada: cuenta como asistencia y queda etiquetada con "J". En el Excel institucional se guarda como asistencia (1), con una nota adjunta en la celda.</p>';
+    if(lista.length === 0){
+      html += '<p class="empty">No hay faltas justificadas todavía.</p>';
+    } else {
+      html += '<ul class="estudiantes">';
+      lista.forEach(function(item){
+        html += '<li><span><b>'+esc(item.nombre)+'</b> — '+displayFecha(item.fecha)+(item.nota?' <span class="helptext">('+esc(item.nota)+')</span>':'')+'</span><button class="btn danger" data-quitar-justificante data-estudiante="'+esc(item.estudianteId)+'" data-fecha="'+esc(item.fecha)+'">Quitar</button></li>';
+      });
+      html += "</ul>";
+    }
     html += "</div>";
     return html;
   }
@@ -649,8 +703,9 @@
       var row = [e.nombre], totalP = 0;
       fechas.forEach(function(f){
         var v = (state.asistencias[g.id][f] || {})[e.id] || "";
-        if(v==="P") totalP++;
-        row.push(v ? ESTADO_VALOR_EXPORT[v] : "");
+        var justificada = v === "A" && esJustificada(g.id, f, e.id);
+        if(v==="P" || justificada) totalP++;
+        row.push(justificada ? ESTADO_VALOR_EXPORT.P : (v ? ESTADO_VALOR_EXPORT[v] : ""));
       });
       row.push(totalP);
       rows.push(row);
@@ -925,10 +980,18 @@
         }
         var totalP = 0;
         Object.keys(fechas).forEach(function(colText){
-          var col = Number(colText), estado = (state.asistencias[grupo.id][fechas[col]] || {})[est.id] || "";
+          var col = Number(colText), fechaIso = fechas[col];
+          var estado = (state.asistencias[grupo.id][fechaIso] || {})[est.id] || "";
+          var justificada = estado === "A" && esJustificada(grupo.id, fechaIso, est.id);
           var cell = ws.getRow(rowNumber).getCell(col);
-          cell.value = estado ? ESTADO_VALOR_EXPORT[estado] : null;
-          if(estado === "P") totalP++;
+          cell.value = justificada ? ESTADO_VALOR_EXPORT.P : (estado ? ESTADO_VALOR_EXPORT[estado] : null);
+          if(justificada){
+            var nota = notaJustificante(grupo.id, fechaIso, est.id);
+            cell.note = "Falta justificada" + (nota ? ": " + nota : "");
+          } else {
+            cell.note = undefined;
+          }
+          if(estado === "P" || justificada) totalP++;
         });
         if(totalCol !== -1) ws.getRow(rowNumber).getCell(totalCol).value = totalP;
       });
@@ -1336,6 +1399,7 @@
       if(!confirm('¿Eliminar el grupo "'+g.nombre+'" y todos sus registros de asistencia? No se puede deshacer.')) return;
       state.grupos = state.grupos.filter(function(x){ return x.id !== g.id; });
       delete state.asistencias[g.id];
+      delete state.justificantes[g.id];
       state.grupoActivoId = state.grupos.length ? state.grupos[0].id : null;
       pasarIndex = null;
       saveState(); render();
@@ -1404,8 +1468,8 @@
     });
     var inputFecha = document.getElementById("inputFechaLista");
     if(inputFecha) inputFecha.addEventListener("change", function(){
-      var fecha = parseFechaMX(inputFecha.value);
-      if(!fecha){ showToast("Escribe la fecha como dd/mm/aaaa."); render(); return; }
+      var fecha = inputFecha.value;
+      if(!fecha){ render(); return; }
       var g = grupoActivo();
       var yaExiste = g && state.asistencias[g.id] && state.asistencias[g.id][fecha];
       if(!yaExiste && g){
@@ -1505,27 +1569,17 @@
       render();
     });
     var hd = document.getElementById("histDesde");
-    if(hd) hd.addEventListener("change", function(){
-      histDesde = hd.value.trim() ? parseFechaMX(hd.value) : "";
-      if(hd.value.trim() && !histDesde){ showToast("Escribe la fecha como dd/mm/aaaa."); histDesde=""; }
-      render();
-    });
+    if(hd) hd.addEventListener("change", function(){ histDesde = hd.value; render(); });
     var hh = document.getElementById("histHasta");
-    if(hh) hh.addEventListener("change", function(){
-      histHasta = hh.value.trim() ? parseFechaMX(hh.value) : "";
-      if(hh.value.trim() && !histHasta){ showToast("Escribe la fecha como dd/mm/aaaa."); histHasta=""; }
-      render();
-    });
+    if(hh) hh.addEventListener("change", function(){ histHasta = hh.value; render(); });
     var btnLimpiarFiltro = document.getElementById("btnLimpiarFiltro");
     if(btnLimpiarFiltro) btnLimpiarFiltro.addEventListener("click", function(){ histDesde=""; histHasta=""; render(); });
     var btnCambiarFecha = document.getElementById("btnCambiarFecha");
     if(btnCambiarFecha) btnCambiarFecha.addEventListener("click", function(){
       var g = grupoActivo();
       var fechaVieja = document.getElementById("selFechaEditar").value;
-      var textoNueva = document.getElementById("inputFechaEditarNueva").value.trim();
-      if(!textoNueva){ showToast("Escribe la nueva fecha como dd/mm/aaaa."); return; }
-      var fechaNueva = parseFechaMX(textoNueva);
-      if(!fechaNueva){ showToast("Escribe la fecha como dd/mm/aaaa."); return; }
+      var fechaNueva = document.getElementById("inputFechaEditarNueva").value;
+      if(!fechaNueva){ showToast("Elige la nueva fecha en el calendario."); return; }
       if(fechaNueva === fechaVieja){ showToast("Es la misma fecha."); return; }
       if(state.asistencias[g.id][fechaNueva] && Object.keys(state.asistencias[g.id][fechaNueva]).length){
         showToast("Ya existe el "+displayFecha(fechaNueva)+" con datos. Elimínalo primero si quieres reemplazarlo.");
@@ -1550,6 +1604,40 @@
       saveState(); render();
       eliminarFechaDelExcelInstitucional(g.nombre, fecha).then(function(){
         showToast("Fecha "+displayFecha(fecha)+" eliminada y columnas recorridas en el Excel.");
+        autoSincronizarCambios();
+      });
+    });
+    document.querySelectorAll("[data-justificar]").forEach(function(celda){
+      celda.addEventListener("click", function(){
+        var g = grupoActivo();
+        var estId = celda.getAttribute("data-estudiante"), fecha = celda.getAttribute("data-fecha");
+        var est = g.estudiantes.find(function(e){ return e.id === estId; });
+        var nombre = est ? est.nombre : "";
+        if(esJustificada(g.id, fecha, estId)){
+          if(!confirm('¿Quitar el justificante de '+nombre+' del '+displayFecha(fecha)+'? Volverá a contar como falta.')) return;
+          delete state.justificantes[g.id][fecha][estId];
+          saveState(); render();
+          showToast("Justificante quitado.");
+          autoSincronizarCambios();
+          return;
+        }
+        if(!confirm('¿Marcar la falta de '+nombre+' del '+displayFecha(fecha)+' como justificada? Contará como asistencia.')) return;
+        var nota = prompt("Motivo del justificante (opcional):", "") || "";
+        var bucket = ensureJustificantesBucket(g.id, fecha);
+        bucket[estId] = {nota: nota.trim()};
+        saveState(); render();
+        showToast("Falta marcada como justificada.");
+        autoSincronizarCambios();
+      });
+    });
+    document.querySelectorAll("[data-quitar-justificante]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var estId = btn.getAttribute("data-estudiante"), fecha = btn.getAttribute("data-fecha");
+        if(!confirm("¿Quitar este justificante? Volverá a contar como falta.")) return;
+        if(state.justificantes[g.id] && state.justificantes[g.id][fecha]) delete state.justificantes[g.id][fecha][estId];
+        saveState(); render();
+        showToast("Justificante quitado.");
         autoSincronizarCambios();
       });
     });
