@@ -116,7 +116,7 @@
   var GOOGLE_CLIENT_ID = "814235047466-9bp0f3j15l5eikmpjasgigol9gnvdelv.apps.googleusercontent.com";
   var GOOGLE_SHEET_ID = "1MyLylWU_26VzjMI8t3JZzDiDkcvsiYTi";
   var DRIVE_FILE_KEY = "listaAsistenciaDriveFileId_v1";
-  var GOOGLE_AUTH_KEY = "listaAsistenciaGoogleDriveAuth_v2";
+  var GOOGLE_AUTH_KEY = "listaAsistenciaGoogleDriveAuth_v3";
   var driveFileId = localStorage.getItem(DRIVE_FILE_KEY) || GOOGLE_SHEET_ID;
   var driveTokenClient = null;
   var drivePendingAction = null;
@@ -313,7 +313,7 @@
     var estudiantes = [];
     var asistenciasPorFecha = {};
     columnasFecha.forEach(function(cf){
-      var iso = cf.fecha.getFullYear() + "-" + String(cf.fecha.getMonth()+1).padStart(2,"0") + "-" + String(cf.fecha.getDate()).padStart(2,"0");
+      var iso = cf.fecha.getUTCFullYear() + "-" + String(cf.fecha.getUTCMonth()+1).padStart(2,"0") + "-" + String(cf.fecha.getUTCDate()).padStart(2,"0");
       asistenciasPorFecha[iso] = {};
     });
 
@@ -332,7 +332,7 @@
       var estId = uid();
       estudiantes.push({id: estId, nombre: nombre});
       columnasFecha.forEach(function(cf){
-        var iso = cf.fecha.getFullYear() + "-" + String(cf.fecha.getMonth()+1).padStart(2,"0") + "-" + String(cf.fecha.getDate()).padStart(2,"0");
+        var iso = cf.fecha.getUTCFullYear() + "-" + String(cf.fecha.getUTCMonth()+1).padStart(2,"0") + "-" + String(cf.fecha.getUTCDate()).padStart(2,"0");
         var raw = rowObj.getCell(cf.col).value;
         var estado = null;
         if(raw === 1) estado = "P";
@@ -819,7 +819,7 @@
     for(var c=nameCol+1; c<=maxCol; c++){
       var v = ws.getRow(headerRow).getCell(c).value;
       if(v instanceof Date){
-        var iso = v.getFullYear() + "-" + String(v.getMonth()+1).padStart(2,"0") + "-" + String(v.getDate()).padStart(2,"0");
+        var iso = v.getUTCFullYear() + "-" + String(v.getUTCMonth()+1).padStart(2,"0") + "-" + String(v.getUTCDate()).padStart(2,"0");
         columnasFecha.push({col:c, iso:iso});
       }
     }
@@ -869,7 +869,7 @@
       var celda = ws.getRow(headerRow).getCell(c);
       var v = celda.value;
       if(v instanceof Date){
-        var iso = v.getFullYear() + "-" + String(v.getMonth()+1).padStart(2,"0") + "-" + String(v.getDate()).padStart(2,"0");
+        var iso = v.getUTCFullYear() + "-" + String(v.getUTCMonth()+1).padStart(2,"0") + "-" + String(v.getUTCDate()).padStart(2,"0");
         if(iso === fechaVieja){
           celda.value = excelFechaSerial(fechaNueva);
           celda.numFmt = "dd/mm/yyyy";
@@ -901,7 +901,10 @@
     plantillaExcel.worksheets.forEach(function(ws){ usados[ws.name] = true; });
     var avisos = [], gruposNuevos = [];
 
-    state.grupos.forEach(function(grupo){
+    var grupoSeleccionado = grupoActivo();
+    var gruposASincronizar = grupoSeleccionado ? [grupoSeleccionado] : [];
+
+    gruposASincronizar.forEach(function(grupo){
       var ws = plantillaExcel.worksheets.find(function(hoja){
         return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === grupo.nombre.trim().toLowerCase();
       });
@@ -935,7 +938,7 @@
       for(var fechaCol=nameCol+1; fechaCol<=maxCol; fechaCol++){
         var headerValue = ws.getRow(headerRow).getCell(fechaCol).value;
         if(headerValue instanceof Date){
-          var iso = headerValue.getFullYear() + "-" + String(headerValue.getMonth()+1).padStart(2,"0") + "-" + String(headerValue.getDate()).padStart(2,"0");
+          var iso = headerValue.getUTCFullYear() + "-" + String(headerValue.getUTCMonth()+1).padStart(2,"0") + "-" + String(headerValue.getUTCDate()).padStart(2,"0");
           fechas[fechaCol] = iso;
           if(anchoFechaOriginal === null && ws.getColumn(fechaCol).width){
             anchoFechaOriginal = ws.getColumn(fechaCol).width;
@@ -1036,7 +1039,7 @@
     if(!driveTokenClient){
       driveTokenClient = google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
-        scope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets",
+        scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
         callback: function(response){
           if(response.error){
             console.error("Error de autorización de Google", response);
@@ -1063,12 +1066,11 @@
     return resultado;
   }
 
-  async function cargarGruposExcelDrive(accessToken){
+  async function descargarWorkbookInstitucional(accessToken){
     var response = await fetch("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?fields=mimeType", {
       headers: {Authorization:"Bearer "+accessToken}
     });
     if(!response.ok) throw new Error("No se pudo consultar el archivo de Drive (HTTP "+response.status+")");
-    var metadata = await response.json();
     var fileResponse = await fetch("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?alt=media", {
       headers: {Authorization:"Bearer "+accessToken}
     });
@@ -1078,6 +1080,11 @@
     await workbook.xlsx.load(workbookBuffer);
     await guardarPlantillaLocal(workbookBuffer);
     plantillaExcel = workbook;
+    return workbook;
+  }
+
+  async function cargarGruposExcelDrive(accessToken){
+    var workbook = await descargarWorkbookInstitucional(accessToken);
     var grupos = [], asistencias = {};
     workbook.worksheets.forEach(function(ws){
       if(esHojaPlantilla(ws.name)) return;
@@ -1315,20 +1322,15 @@
       if(fileInfo.ok){
         var fileMetadata = await fileInfo.json();
         if(fileMetadata.mimeType !== "application/vnd.google-apps.spreadsheet"){
-          if(!plantillaExcel){
-            var gruposLocales = state.grupos;
-            var asistenciasLocales = state.asistencias;
-            var grupoActivoLocal = state.grupoActivoId;
-            await cargarGruposExcelDrive(accessToken);
-            state.grupos = gruposLocales;
-            state.asistencias = asistenciasLocales;
-            state.grupoActivoId = grupoActivoLocal;
-          }
+          await descargarWorkbookInstitucional(accessToken);
           var resultado = await crearBufferPlantillaInstitucional();
           var upload = await fetch("https://www.googleapis.com/upload/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?uploadType=media", {
             method:"PATCH", headers:{Authorization:"Bearer "+accessToken, "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, body:resultado.buffer
           });
-          if(!upload.ok) throw new Error("No se pudo actualizar el Excel institucional");
+          if(!upload.ok){
+            var uploadDetail = await upload.text();
+            throw new Error("No se pudo actualizar el Excel institucional (HTTP "+upload.status+"): "+uploadDetail.slice(0,160));
+          }
           showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional actualizado en Drive.");
           return true;
         }

@@ -70,6 +70,10 @@ function createWindow() {
 
   window.webContents.setUserAgent(CHROME_UA);
 
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.key === "F12") window.webContents.toggleDevTools();
+  });
+
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://accounts.google.com")) {
       return {
