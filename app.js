@@ -934,21 +934,16 @@
 
       var fechas = {};
       var totalCol = -1;
-      var anchoFechaOriginal = null;
       for(var fechaCol=nameCol+1; fechaCol<=maxCol; fechaCol++){
         var headerValue = ws.getRow(headerRow).getCell(fechaCol).value;
         if(headerValue instanceof Date){
           var iso = headerValue.getUTCFullYear() + "-" + String(headerValue.getUTCMonth()+1).padStart(2,"0") + "-" + String(headerValue.getUTCDate()).padStart(2,"0");
           fechas[fechaCol] = iso;
-          if(anchoFechaOriginal === null && ws.getColumn(fechaCol).width){
-            anchoFechaOriginal = ws.getColumn(fechaCol).width;
-          }
         } else if(normalizaEtiqueta(headerValue).indexOf("TOTAL") !== -1){
           totalCol = fechaCol;
           break;
         }
       }
-      if(anchoFechaOriginal === null) anchoFechaOriginal = 6;
 
       var limiteAsistencia = limiteColumnaAsistencias(ws, headerRow, nameCol, maxCol);
       var fechasEstado = Object.keys(state.asistencias[grupo.id] || {}).sort();
@@ -964,8 +959,6 @@
         var headerCell = ws.getRow(headerRow).getCell(ultimaColumnaFecha);
         headerCell.value = excelFechaSerial(iso);
         headerCell.numFmt = "dd/mm/yyyy";
-        ws.getColumn(ultimaColumnaFecha).width = anchoFechaOriginal;
-        ws.getColumn(ultimaColumnaFecha).customWidth = true;
       });
       if(fechasOmitidas.length){
         avisos.push('El grupo "'+grupo.nombre+'" ya no tiene columnas de asistencia libres en la plantilla; no se guardaron '+fechasOmitidas.length+' fecha(s).');
@@ -1001,8 +994,6 @@
       Object.keys(fechas).forEach(function(colText){
         var fechaCell = ws.getRow(headerRow).getCell(Number(colText));
         fechaCell.numFmt = "dd/mm/yyyy";
-        ws.getColumn(Number(colText)).width = anchoFechaOriginal;
-        ws.getColumn(Number(colText)).customWidth = true;
       });
     });
 
