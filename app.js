@@ -1017,34 +1017,119 @@
     showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional descargado con el formato original.");
   }
 
+  // =========================================================
+  // GOOGLE IDENTITY SERVICES — carga robusta con reintentos
+  // =========================================================
+  // El script de Google se carga de forma dinámica (no en el <head>) para
+  // poder reintentarlo si la red falla en el momento del arranque. Antes,
+  // un solo fallo de carga dejaba "window.google" indefinido para siempre
+  // en esa sesión, aunque la conexión se recuperara después.
+  var GOOGLE_GSI_URL = "https://accounts.google.com/gsi/client";
+  var GOOGLE_GSI_MAX_INTENTOS = 3;
+  var GOOGLE_GSI_TIMEOUT_MS = 7000;
+  var googleIdentityCargando = null;
+
+  function googleIdentityListo(){
+    return !!(window.google && google.accounts && google.accounts.oauth2);
+  }
+  function esperarMs(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms); }); }
+
+  function intentarCargarScriptGoogle(){
+    return new Promise(function(resolve){
+      // Quita cualquier intento previo fallido para que el navegador haga
+      // una petición de red nueva (reutilizar la misma etiqueta <script>
+      // no dispara otro evento load/error).
+      document.querySelectorAll('script[data-gsi-loader="1"]').forEach(function(s){ s.remove(); });
+
+      var terminado = false;
+      var script = document.createElement("script");
+      script.src = GOOGLE_GSI_URL + "?t=" + Date.now();
+      script.async = true;
+      script.setAttribute("data-gsi-loader", "1");
+
+      var temporizador = setTimeout(function(){
+        if(terminado) return;
+        terminado = true;
+        resolve(false);
+      }, GOOGLE_GSI_TIMEOUT_MS);
+
+      script.onload = function(){
+        if(terminado) return;
+        terminado = true;
+        clearTimeout(temporizador);
+        // Pequeño margen por si el objeto global tarda unos milisegundos en registrarse.
+        setTimeout(function(){ resolve(googleIdentityListo()); }, 50);
+      };
+      script.onerror = function(){
+        if(terminado) return;
+        terminado = true;
+        clearTimeout(temporizador);
+        resolve(false);
+      };
+
+      document.head.appendChild(script);
+    });
+  }
+
+  // Se puede llamar tantas veces como se quiera (al arrancar, al volver la
+  // conexión, o justo antes de usar Drive); si ya está listo resuelve de
+  // inmediato, y si ya hay un intento en curso reutiliza esa misma promesa.
+  function asegurarGoogleIdentity(mostrarEstado){
+    if(googleIdentityListo()) return Promise.resolve(true);
+    if(googleIdentityCargando) return googleIdentityCargando;
+
+    googleIdentityCargando = (async function(){
+      for(var intento=1; intento<=GOOGLE_GSI_MAX_INTENTOS; intento++){
+        if(!navigator.onLine){
+          await esperarMs(1000);
+          continue;
+        }
+        if(mostrarEstado && intento>1){
+          showToast("Reintentando conectar con Google… ("+intento+"/"+GOOGLE_GSI_MAX_INTENTOS+")");
+        }
+        var ok = await intentarCargarScriptGoogle();
+        if(ok) return true;
+        if(intento < GOOGLE_GSI_MAX_INTENTOS) await esperarMs(1000 * intento);
+      }
+      return googleIdentityListo();
+    })();
+
+    var promesaActual = googleIdentityCargando;
+    promesaActual.then(function(){ googleIdentityCargando = null; });
+    return promesaActual;
+  }
+
   function iniciarGoogleDrive(action){
     if(location.protocol === "file:" && !window.Capacitor){
       showToast("Abre FullStatus desde http://localhost para iniciar sesión con Google.");
       return;
     }
-    if(!window.google || !google.accounts || !google.accounts.oauth2){
-      showToast("No se pudo cargar el acceso de Google. Revisa tu conexión.");
-      return;
-    }
     drivePendingAction = action;
-    if(!driveTokenClient){
-      driveTokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
-        callback: function(response){
-          if(response.error){
-            console.error("Error de autorización de Google", response);
-            showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
-            return;
+    asegurarGoogleIdentity(true).then(function(listo){
+      if(!listo){
+        showToast("No se pudo conectar con los servicios de Google tras varios intentos. Si tu conexión está bien, revisa que un firewall o antivirus no esté bloqueando accounts.google.com.");
+        drivePendingAction = null;
+        return;
+      }
+      if(!driveTokenClient){
+        driveTokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+          callback: function(response){
+            if(response.error){
+              console.error("Error de autorización de Google", response);
+              showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
+              return;
+            }
+            localStorage.setItem(GOOGLE_AUTH_KEY, "1");
+            var pending = drivePendingAction;
+            drivePendingAction = null;
+            if(pending) pending(response.access_token);
           }
-          localStorage.setItem(GOOGLE_AUTH_KEY, "1");
-          var pending = drivePendingAction;
-          drivePendingAction = null;
-          if(pending) pending(response.access_token);
-        }
-      });
-    }
-    driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
+        });
+      }
+      driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
+    });
   }
 
   function columnaA1(numero){
@@ -1658,7 +1743,7 @@
     if(navigator.onLine){ ind.classList.remove("offline"); txt.textContent = cambiosPendientes ? "En línea · cambios pendientes" : "En línea"; }
     else { ind.classList.add("offline"); txt.textContent = "Sin conexión — tus datos se guardan en este dispositivo"; }
   }
-  window.addEventListener("online", function(){ updateConn(); sincronizarPendientes(); });
+  window.addEventListener("online", function(){ updateConn(); asegurarGoogleIdentity(false); sincronizarPendientes(); });
   window.addEventListener("offline", updateConn);
 
   // =========================================================
@@ -1669,6 +1754,7 @@
   });
   if(!state.grupoActivoId && state.grupos.length) state.grupoActivoId = state.grupos[0].id;
   updateConn();
+  asegurarGoogleIdentity(false);
   restaurarCacheLocal().then(function(){
     setTab("pasar");
     sincronizarPendientes();
