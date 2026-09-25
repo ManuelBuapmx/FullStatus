@@ -844,6 +844,57 @@
     return true;
   }
 
+  // Detecta columnas de fecha que ya no tienen ninguna marca de asistencia en
+  // ningún alumno (por ejemplo, columnas que quedaron vacías tras corregir
+  // registros a mano) y las quita, recorriendo hacia la izquierda las columnas
+  // siguientes para no dejar huecos en el bloque de "ASISTENCIAS". Se usa en
+  // cada sincronización para mantener las columnas organizadas sin tener que
+  // borrar fecha por fecha manualmente.
+  function compactarColumnasVacias(ws, headerRow, nameCol, maxColBusqueda){
+    var maxFilaAlumno = headerRow + 32;
+    var columnasFecha = [];
+    for(var c=nameCol+1; c<=maxColBusqueda; c++){
+      var v = ws.getRow(headerRow).getCell(c).value;
+      if(v instanceof Date) columnasFecha.push(c);
+    }
+    if(columnasFecha.length === 0) return 0;
+
+    var conservar = columnasFecha.filter(function(col){
+      for(var fila=headerRow+1; fila<=maxFilaAlumno; fila++){
+        var val = ws.getRow(fila).getCell(col).value;
+        if(val !== null && val !== undefined && val !== "") return true;
+      }
+      return false;
+    });
+    if(conservar.length === columnasFecha.length) return 0;
+
+    var snapshot = {};
+    conservar.forEach(function(col){
+      for(var fila2=headerRow; fila2<=maxFilaAlumno; fila2++){
+        var celda = ws.getRow(fila2).getCell(col);
+        snapshot[col+"_"+fila2] = {value: celda.value, numFmt: celda.numFmt};
+      }
+    });
+
+    var primerCol = columnasFecha[0];
+    var ultimaCol = columnasFecha[columnasFecha.length-1];
+    conservar.forEach(function(colOriginal, indice){
+      var colDestino = primerCol + indice;
+      for(var fila3=headerRow; fila3<=maxFilaAlumno; fila3++){
+        var datos = snapshot[colOriginal+"_"+fila3];
+        var celdaDestino = ws.getRow(fila3).getCell(colDestino);
+        celdaDestino.value = datos.value;
+        celdaDestino.numFmt = datos.numFmt;
+      }
+    });
+    for(var colLimpiar=primerCol+conservar.length; colLimpiar<=ultimaCol; colLimpiar++){
+      for(var fila4=headerRow; fila4<=maxFilaAlumno; fila4++){
+        ws.getRow(fila4).getCell(colLimpiar).value = null;
+      }
+    }
+    return columnasFecha.length - conservar.length;
+  }
+
   // Aplica eliminarFechaDeHoja sobre la hoja real del grupo en el archivo
   // institucional cargado en memoria, y refresca la copia local en caché.
   async function eliminarFechaDelExcelInstitucional(nombreGrupo, fechaISO){
@@ -924,6 +975,15 @@
         return;
       }
       var headerRow = encabezado.headerRow, nameCol = encabezado.nameCol, maxCol = encabezado.maxCol;
+
+      // Antes de tocar nada más, quitamos columnas de fecha que hayan quedado
+      // completamente vacías (sin ninguna marca en ningún alumno) y recorremos
+      // el resto hacia la izquierda, para que "Actualizar" también organice
+      // las columnas en vez de dejar huecos entre las fechas reales.
+      var columnasVaciasEliminadas = compactarColumnasVacias(ws, headerRow, nameCol, maxCol);
+      if(columnasVaciasEliminadas > 0){
+        avisos.push('Se organizaron las columnas de "'+grupo.nombre+'": se quitaron '+columnasVaciasEliminadas+' columna(s) de fecha vacía(s).');
+      }
 
       // Profesor y Materia viven siempre en la misma columna que la respuesta,
       // 8 y 3 filas arriba del encabezado "ALUMNO" respectivamente. No se
@@ -1017,119 +1077,34 @@
     showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional descargado con el formato original.");
   }
 
-  // =========================================================
-  // GOOGLE IDENTITY SERVICES — carga robusta con reintentos
-  // =========================================================
-  // El script de Google se carga de forma dinámica (no en el <head>) para
-  // poder reintentarlo si la red falla en el momento del arranque. Antes,
-  // un solo fallo de carga dejaba "window.google" indefinido para siempre
-  // en esa sesión, aunque la conexión se recuperara después.
-  var GOOGLE_GSI_URL = "https://accounts.google.com/gsi/client";
-  var GOOGLE_GSI_MAX_INTENTOS = 3;
-  var GOOGLE_GSI_TIMEOUT_MS = 7000;
-  var googleIdentityCargando = null;
-
-  function googleIdentityListo(){
-    return !!(window.google && google.accounts && google.accounts.oauth2);
-  }
-  function esperarMs(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms); }); }
-
-  function intentarCargarScriptGoogle(){
-    return new Promise(function(resolve){
-      // Quita cualquier intento previo fallido para que el navegador haga
-      // una petición de red nueva (reutilizar la misma etiqueta <script>
-      // no dispara otro evento load/error).
-      document.querySelectorAll('script[data-gsi-loader="1"]').forEach(function(s){ s.remove(); });
-
-      var terminado = false;
-      var script = document.createElement("script");
-      script.src = GOOGLE_GSI_URL + "?t=" + Date.now();
-      script.async = true;
-      script.setAttribute("data-gsi-loader", "1");
-
-      var temporizador = setTimeout(function(){
-        if(terminado) return;
-        terminado = true;
-        resolve(false);
-      }, GOOGLE_GSI_TIMEOUT_MS);
-
-      script.onload = function(){
-        if(terminado) return;
-        terminado = true;
-        clearTimeout(temporizador);
-        // Pequeño margen por si el objeto global tarda unos milisegundos en registrarse.
-        setTimeout(function(){ resolve(googleIdentityListo()); }, 50);
-      };
-      script.onerror = function(){
-        if(terminado) return;
-        terminado = true;
-        clearTimeout(temporizador);
-        resolve(false);
-      };
-
-      document.head.appendChild(script);
-    });
-  }
-
-  // Se puede llamar tantas veces como se quiera (al arrancar, al volver la
-  // conexión, o justo antes de usar Drive); si ya está listo resuelve de
-  // inmediato, y si ya hay un intento en curso reutiliza esa misma promesa.
-  function asegurarGoogleIdentity(mostrarEstado){
-    if(googleIdentityListo()) return Promise.resolve(true);
-    if(googleIdentityCargando) return googleIdentityCargando;
-
-    googleIdentityCargando = (async function(){
-      for(var intento=1; intento<=GOOGLE_GSI_MAX_INTENTOS; intento++){
-        if(!navigator.onLine){
-          await esperarMs(1000);
-          continue;
-        }
-        if(mostrarEstado && intento>1){
-          showToast("Reintentando conectar con Google… ("+intento+"/"+GOOGLE_GSI_MAX_INTENTOS+")");
-        }
-        var ok = await intentarCargarScriptGoogle();
-        if(ok) return true;
-        if(intento < GOOGLE_GSI_MAX_INTENTOS) await esperarMs(1000 * intento);
-      }
-      return googleIdentityListo();
-    })();
-
-    var promesaActual = googleIdentityCargando;
-    promesaActual.then(function(){ googleIdentityCargando = null; });
-    return promesaActual;
-  }
-
   function iniciarGoogleDrive(action){
     if(location.protocol === "file:" && !window.Capacitor){
       showToast("Abre FullStatus desde http://localhost para iniciar sesión con Google.");
       return;
     }
+    if(!window.google || !google.accounts || !google.accounts.oauth2){
+      showToast("No se pudo cargar el acceso de Google. Revisa tu conexión.");
+      return;
+    }
     drivePendingAction = action;
-    asegurarGoogleIdentity(true).then(function(listo){
-      if(!listo){
-        showToast("No se pudo conectar con los servicios de Google tras varios intentos. Si tu conexión está bien, revisa que un firewall o antivirus no esté bloqueando accounts.google.com.");
-        drivePendingAction = null;
-        return;
-      }
-      if(!driveTokenClient){
-        driveTokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
-          callback: function(response){
-            if(response.error){
-              console.error("Error de autorización de Google", response);
-              showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
-              return;
-            }
-            localStorage.setItem(GOOGLE_AUTH_KEY, "1");
-            var pending = drivePendingAction;
-            drivePendingAction = null;
-            if(pending) pending(response.access_token);
+    if(!driveTokenClient){
+      driveTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+        callback: function(response){
+          if(response.error){
+            console.error("Error de autorización de Google", response);
+            showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
+            return;
           }
-        });
-      }
-      driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
-    });
+          localStorage.setItem(GOOGLE_AUTH_KEY, "1");
+          var pending = drivePendingAction;
+          drivePendingAction = null;
+          if(pending) pending(response.access_token);
+        }
+      });
+    }
+    driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
   }
 
   function columnaA1(numero){
@@ -1398,7 +1373,14 @@
       if(fileInfo.ok){
         var fileMetadata = await fileInfo.json();
         if(fileMetadata.mimeType !== "application/vnd.google-apps.spreadsheet"){
-          await descargarWorkbookInstitucional(accessToken);
+          // Antes se volvía a descargar el archivo de Drive siempre, lo que
+          // sobreescribía en memoria cualquier edición local aún no subida
+          // (fechas eliminadas/renombradas, columnas recién organizadas) con
+          // la versión vieja que sigue en Drive. Ahora solo se descarga si
+          // todavía no tenemos ninguna copia cargada en este dispositivo.
+          if(!plantillaExcel){
+            await descargarWorkbookInstitucional(accessToken);
+          }
           var resultado = await crearBufferPlantillaInstitucional();
           var upload = await fetch("https://www.googleapis.com/upload/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?uploadType=media", {
             method:"PATCH", headers:{Authorization:"Bearer "+accessToken, "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, body:resultado.buffer
@@ -1743,7 +1725,7 @@
     if(navigator.onLine){ ind.classList.remove("offline"); txt.textContent = cambiosPendientes ? "En línea · cambios pendientes" : "En línea"; }
     else { ind.classList.add("offline"); txt.textContent = "Sin conexión — tus datos se guardan en este dispositivo"; }
   }
-  window.addEventListener("online", function(){ updateConn(); asegurarGoogleIdentity(false); sincronizarPendientes(); });
+  window.addEventListener("online", function(){ updateConn(); sincronizarPendientes(); });
   window.addEventListener("offline", updateConn);
 
   // =========================================================
@@ -1754,7 +1736,6 @@
   });
   if(!state.grupoActivoId && state.grupos.length) state.grupoActivoId = state.grupos[0].id;
   updateConn();
-  asegurarGoogleIdentity(false);
   restaurarCacheLocal().then(function(){
     setTab("pasar");
     sincronizarPendientes();
