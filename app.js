@@ -30,7 +30,7 @@
     return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
 
-  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {}, justificantes: {} }; }
+  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {}, justificantes: {}, hojasPorEliminar: [] }; }
   function loadState(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
@@ -39,6 +39,7 @@
       if(!parsed.grupos) return defaultState();
       if(!parsed.justificantes) parsed.justificantes = {};
       if(!parsed.asistencias) parsed.asistencias = {};
+      if(!Array.isArray(parsed.hojasPorEliminar)) parsed.hojasPorEliminar = [];
       purgarFechasVacias(parsed);
       return parsed;
     }catch(e){ return defaultState(); }
@@ -1057,6 +1058,14 @@
     var grupoSeleccionado = grupoActivo();
     var gruposASincronizar = grupoSeleccionado ? [grupoSeleccionado] : [];
 
+    // Pestañas de grupos eliminados en la app; nunca se toca la hoja "Plantilla".
+    var hojasEliminadas = [];
+    (state.hojasPorEliminar || []).forEach(function(nombre){
+      var objetivo = String(nombre).trim().toLowerCase();
+      if(esHojaPlantilla(objetivo)) return;
+      var hoja = plantillaExcel.worksheets.find(function(h){ return !esHojaPlantilla(h.name) && h.name.trim().toLowerCase() === objetivo; });
+      if(hoja){ hojasEliminadas.push(hoja.name); plantillaExcel.removeWorksheet(hoja.id); }
+    });
     gruposASincronizar.forEach(function(grupo){
       var ws = plantillaExcel.worksheets.find(function(hoja){
         return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === grupo.nombre.trim().toLowerCase();
@@ -1162,6 +1171,9 @@
 
     if(gruposNuevos.length){
       avisos.unshift("Se crearon en el archivo institucional las pestañas: " + gruposNuevos.join(", ") + ".");
+    }
+    if(hojasEliminadas.length){
+      avisos.unshift("Se eliminaron del archivo institucional las pestañas: " + hojasEliminadas.join(", ") + ".");
     }
 
     var buffer = await plantillaExcel.xlsx.writeBuffer();
@@ -1333,6 +1345,7 @@
     if(!grupos.length) throw new Error("No se encontraron grupos en el archivo institucional");
     state.grupos = grupos;
     state.asistencias = asistencias;
+    state.hojasPorEliminar = [];
     state.grupoActivoId = grupos[0].id;
     saveState(false);
     render();
@@ -1411,6 +1424,7 @@
     if(!grupos.length) throw new Error("No se encontraron grupos con alumnos");
     state.grupos = grupos;
     state.asistencias = asistencias;
+    state.hojasPorEliminar = [];
     state.grupoActivoId = grupos[0].id;
     saveState(false);
     if(estadoEl) estadoEl.textContent = "";
@@ -1585,6 +1599,7 @@
   function marcarSincronizado(){
     cambiosPendientes = false;
     localStorage.removeItem("listaAsistenciaCambiosPendientes_v1");
+    if(state.hojasPorEliminar && state.hojasPorEliminar.length){ state.hojasPorEliminar = []; saveState(false); }
   }
   function sincronizarPendientes(){
     if(!navigator.onLine || !cambiosPendientes) return;
@@ -1638,7 +1653,9 @@
     var btnEliminarGrupo = document.getElementById("btnEliminarGrupo");
     if(btnEliminarGrupo) btnEliminarGrupo.addEventListener("click", function(){
       var g = grupoActivo(); if(!g) return;
-      if(!confirm('¿Eliminar el grupo "'+g.nombre+'" y todos sus registros de asistencia? No se puede deshacer.')) return;
+      if(!confirm('¿Eliminar el grupo "'+g.nombre+'" y todos sus registros de asistencia? También se eliminará su pestaña del Excel institucional en la próxima sincronización. No se puede deshacer.')) return;
+      if(!Array.isArray(state.hojasPorEliminar)) state.hojasPorEliminar = [];
+      if(!esHojaPlantilla(g.nombre)) state.hojasPorEliminar.push(g.nombre);
       state.grupos = state.grupos.filter(function(x){ return x.id !== g.id; });
       delete state.asistencias[g.id];
       delete state.justificantes[g.id];
@@ -1658,6 +1675,7 @@
       var nombre = input.value.trim();
       if(!nombre){ showToast("Escribe un nombre para el grupo."); return; }
       var g = {id: uid(), nombre: nombre, estudiantes: [], materia:"", profesor:""};
+      state.hojasPorEliminar = (state.hojasPorEliminar || []).filter(function(n){ return n.trim().toLowerCase() !== nombre.toLowerCase(); });
       state.grupos.push(g);
       state.grupoActivoId = g.id;
       pasarIndex = null;

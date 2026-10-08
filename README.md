@@ -99,6 +99,11 @@ Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-10-08 — Eliminar grupo también elimina su pestaña en el Excel
+- **Falla:** "Eliminar este grupo" solo borraba el grupo en la app; su pestaña quedaba en el Excel de Drive (ej. la hoja de prueba `12F` seguía en el archivo pero ya no aparecía en la lista de grupos).
+- **Ahora:** el nombre del grupo se guarda en `state.hojasPorEliminar` y `crearBufferPlantillaInstitucional` elimina esa pestaña (nunca "Plantilla") en la siguiente sincronización; `marcarSincronizado` vacía la lista. Crear un grupo con el mismo nombre la cancela, y recargar desde Drive también la reinicia. La confirmación avisa del borrado en Excel.
+- Limitación: solo aplica a la ruta de Excel (`.xlsx`); no a hojas de Google nativas (`actualizarHojaGoogle`). Las pestañas eliminadas que ya existían antes de este cambio (como `12F`) no se borran solas: se recuperan con "Cargar archivo institucional desde Drive" o se eliminan a mano.
+
 ### 2026-10-08 — Unidades/periodos y arreglo del justificante
 - **Unidades y periodos:** cada grupo puede definir unidades (nombre + fecha inicial y final, p. ej. 2, 3 o 4 por materia). Se gestionan en Historial → "Unidades y periodos" (`renderUnidades`, `unidadesDelGrupo`, `unidadDeFecha`). El historial tiene un selector "Unidad" que filtra las fechas (`fechasFiltradas`, usado también por `construirMatrizActiva`, así que "Copiar para pegar en Excel" respeta la unidad); la tabla muestra la unidad bajo cada fecha y una línea dorada donde cambia de unidad. Se valida que `hasta >= desde` y que no se empalmen. Se guardan en `grupo.unidades = [{id, nombre, desde, hasta}]` dentro de `localStorage`; **no se escriben en el Excel institucional** y cambiarlas no marca "cambios pendientes".
 - **Falla corregida — el botón de justificar no hacía nada en escritorio:** tras confirmar, el código llamaba a `prompt()`, que Electron no soporta (lanza error y se abortaba la acción). Se reemplazó por un cuadro propio (`pedirTexto`, estilos `.modal-fondo`/`.modal-caja`).
