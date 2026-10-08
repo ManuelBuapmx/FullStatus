@@ -30,15 +30,30 @@
     return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
 
-  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {} }; }
+  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {}, justificantes: {} }; }
   function loadState(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
       if(!raw) return defaultState();
       var parsed = JSON.parse(raw);
       if(!parsed.grupos) return defaultState();
+      if(!parsed.justificantes) parsed.justificantes = {};
+      if(!parsed.asistencias) parsed.asistencias = {};
+      purgarFechasVacias(parsed);
       return parsed;
     }catch(e){ return defaultState(); }
+  }
+  // Versiones anteriores creaban (y guardaban) un registro vacío de "hoy" con
+  // solo seleccionar un grupo, lo que luego generaba una columna de fecha vacía
+  // en el Excel. Al cargar, se eliminan esos registros sin ninguna marca para
+  // que no vuelvan a aparecer como fechas del grupo.
+  function purgarFechasVacias(estado){
+    Object.keys(estado.asistencias || {}).forEach(function(grupoId){
+      var porFecha = estado.asistencias[grupoId] || {};
+      Object.keys(porFecha).forEach(function(fecha){
+        if(!porFecha[fecha] || Object.keys(porFecha[fecha]).length === 0) delete porFecha[fecha];
+      });
+    });
   }
   function saveState(markPending){
     try{
@@ -89,6 +104,7 @@
       if(!state.grupos.length){
         var grupos = [], asistencias = {};
         plantillaExcel.worksheets.forEach(function(ws){
+          if(esHojaPlantilla(ws.name)) return;
           var datos = extraerGrupoDeHoja(ws), grupoId = uid();
           grupos.push({id:grupoId, nombre:ws.name, estudiantes:datos ? datos.estudiantes : [], materia:datos ? datos.materia : "", profesor:datos ? datos.profesor : ""});
           asistencias[grupoId] = datos ? datos.asistencias : {};
@@ -106,6 +122,8 @@
   var pasarFecha = todayISO();
   var pasarIndex = null;
   var pasarViewMode = "card";
+  var pasarSegundaLista = null;
+  var pasarSegundaIndex = null;
   var histDesde = "";
   var histHasta = "";
   var plantillaExcel = null;
@@ -130,8 +148,36 @@
     if(!state.asistencias[grupoId][fecha]) state.asistencias[grupoId][fecha] = {};
     return state.asistencias[grupoId][fecha];
   }
-  function fechasDelGrupo(grupoId){ return Object.keys(state.asistencias[grupoId] || {}).sort(); }
+  // Lectura SIN efectos secundarios: devuelve las marcas de una fecha si existen,
+  // o un objeto vacío temporal si no. A diferencia de ensureAsistenciaBucket,
+  // nunca crea la fecha en el estado; así, solo mirar un grupo en la fecha de
+  // hoy ya no genera una columna nueva. La fecha solo nace al registrar una marca.
+  function leerAsistenciaBucket(grupoId, fecha){
+    return (state.asistencias[grupoId] && state.asistencias[grupoId][fecha]) || {};
+  }
+  // Una fecha cuenta como "registrada" únicamente si tiene al menos una marca.
+  function fechaTieneMarcas(grupoId, fecha){
+    return Object.keys(leerAsistenciaBucket(grupoId, fecha)).length > 0;
+  }
+  function fechasDelGrupo(grupoId){
+    return Object.keys(state.asistencias[grupoId] || {}).filter(function(fecha){
+      return fechaTieneMarcas(grupoId, fecha);
+    }).sort();
+  }
   function faltasEquivalentes(faltas, retardos){ return faltas + Math.floor(retardos / 3); }
+
+  function ensureJustificantesBucket(grupoId, fecha){
+    if(!state.justificantes[grupoId]) state.justificantes[grupoId] = {};
+    if(!state.justificantes[grupoId][fecha]) state.justificantes[grupoId][fecha] = {};
+    return state.justificantes[grupoId][fecha];
+  }
+  function esJustificada(grupoId, fecha, estudianteId){
+    return !!(state.justificantes[grupoId] && state.justificantes[grupoId][fecha] && state.justificantes[grupoId][fecha][estudianteId]);
+  }
+  function notaJustificante(grupoId, fecha, estudianteId){
+    var entrada = state.justificantes[grupoId] && state.justificantes[grupoId][fecha] && state.justificantes[grupoId][fecha][estudianteId];
+    return entrada ? (entrada.nota || "") : "";
+  }
 
   function showToast(msg){
     var t = document.getElementById("toast");
@@ -158,6 +204,10 @@
   // =========================================================
   // GRUPOS
   // =========================================================
+  function botonActualizarDrive(){
+    return '<button class="btn" id="btnActualizarDrive">'+(driveFileId ? "Actualizar en Google Drive" : "Guardar en Google Drive")+'</button>';
+  }
+
   function renderGrupos(){
     var html = "";
 
@@ -166,6 +216,9 @@
     html += '<p class="helptext" style="margin-top:0;">El archivo se carga una vez y queda disponible en este dispositivo. Sin conexión, tus cambios se guardan localmente y se sincronizan al volver internet.</p>';
     html += '<button class="btn" id="btnCargarGoogle">Cargar archivo institucional desde Drive</button>';
     html += '<span id="cargarGoogleEstado" class="helptext" style="margin-left:10px;"></span>';
+    if(state.grupos.length){
+      html += '<div style="margin-top:10px;">' + botonActualizarDrive() + '</div>';
+    }
     html += "</div>";
 
     html += '<div class="card">';
@@ -226,6 +279,16 @@
   }
 
   // ---- Lectura de la plantilla institucional ----
+  var NOMBRE_HOJA_PLANTILLA = "plantilla";
+  function esHojaPlantilla(nombre){ return String(nombre||"").trim().toLowerCase() === NOMBRE_HOJA_PLANTILLA; }
+  function obtenerHojaPlantilla(wb){
+    return wb.worksheets.find(function(ws){ return esHojaPlantilla(ws.name); }) || null;
+  }
+  function columnaDesdeLetra(letra){
+    var resultado = 0;
+    for(var i=0; i<letra.length; i++){ resultado = resultado*26 + (letra.charCodeAt(i) - 64); }
+    return resultado;
+  }
   function normalizaEtiqueta(v){ return String(v==null?"":v).replace(/\s+/g,"").toUpperCase(); }
   function esEncabezadoAlumno(v){
     var etiqueta = normalizaEtiqueta(v);
@@ -327,6 +390,7 @@
           var importados = 0, estudiantesTotal = 0, omitidos = [];
           for(var i=0; i<wb.worksheets.length; i++){
             var ws = wb.worksheets[i];
+            if(esHojaPlantilla(ws.name)) continue;
             var datos = extraerGrupoDeHoja(ws);
             if(!datos){ omitidos.push(ws.name); continue; }
             var existente = state.grupos.find(function(g){ return g.nombre.trim().toLowerCase() === datos.nombre.trim().toLowerCase(); });
@@ -379,7 +443,8 @@
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
     if(g.estudiantes.length === 0) return '<div class="card">'+renderSelectorGrupoPasar(g)+'<p class="empty">"'+esc(g.nombre)+'" todavía no tiene estudiantes. Agrégalos en la pestaña "Grupos".</p></div>';
 
-    var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+    // Solo lectura: la fecha se crea hasta que se marca al primer alumno.
+    var bucket = leerAsistenciaBucket(g.id, pasarFecha);
     if(pasarIndex === null){
       var idx = g.estudiantes.findIndex(function(e){ return !bucket[e.id]; });
       pasarIndex = idx === -1 ? g.estudiantes.length : idx;
@@ -388,12 +453,20 @@
     var html = '<div class="card">';
     html += '<div class="row" style="justify-content:space-between;">';
     html += renderSelectorGrupoPasar(g);
-    html += '<div class="field" style="margin-bottom:0;"><label for="inputFechaLista">Fecha (dd/mm/aaaa)</label><input type="text" id="inputFechaLista" value="'+displayFecha(pasarFecha)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
-    html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="inputFechaLista">Fecha</label><input type="date" id="inputFechaLista" value="'+pasarFecha+'"></div>';
+    if(pasarViewMode !== "segunda"){
+      html += '<button class="link-sutil" id="btnToggleVista">'+(pasarViewMode==="card" ? "Ver lista completa" : "Volver a modo tarjeta")+'</button>';
+    }
+    html += botonActualizarDrive();
     html += "</div></div>";
 
     if(pasarViewMode === "list"){
       html += renderPasarListaCompleta(g, bucket);
+      return html;
+    }
+
+    if(pasarViewMode === "segunda"){
+      html += renderSegundoPase(g, bucket);
       return html;
     }
 
@@ -411,6 +484,9 @@
       html += "</div>";
       html += '<p class="helptext">Cada 3 retardos se convierten en 1 falta.</p>';
       html += '<div class="row" style="justify-content:center;">';
+      if(counts.A > 0){
+        html += '<button class="btn" id="btnSegundoPase">Segundo pase: revisar faltas ('+counts.A+')</button>';
+      }
       html += '<button class="btn secondary" id="btnRevisarLista">Revisar y corregir</button>';
       html += '<button class="btn secondary" id="btnReiniciarLista">Empezar de nuevo</button>';
       html += "</div></div>";
@@ -429,7 +505,6 @@
     html += '<div class="botones-estado">';
     html += '<button class="btn-estado presente" data-marcar="P">Asistencia</button>';
     html += '<button class="btn-estado falta" data-marcar="A">Falta</button>';
-    html += '<button class="btn-estado retardo" data-marcar="R">Retardo</button>';
     html += "</div>";
     html += '<div class="fila-secundaria">';
     html += '<button class="link-sutil" id="btnAnterior" '+(pasarIndex===0?"disabled":"")+'>‹ Anterior</button>';
@@ -454,6 +529,63 @@
     return html;
   }
 
+  function renderSegundoPase(g, bucket){
+    if(!pasarSegundaLista || pasarSegundaLista.length === 0){
+      var htmlVacio = '<div class="card completo">';
+      htmlVacio += "<h3>Sin faltas que revisar</h3>";
+      htmlVacio += '<p class="helptext">No hay estudiantes marcados con falta en esta fecha.</p>';
+      htmlVacio += '<div class="row" style="justify-content:center;">';
+      htmlVacio += '<button class="btn secondary" id="btnVolverResumen">Volver</button>';
+      htmlVacio += "</div></div>";
+      return htmlVacio;
+    }
+
+    if(pasarSegundaIndex >= pasarSegundaLista.length){
+      var counts = {P:0,A:0,R:0};
+      g.estudiantes.forEach(function(e){ var v=bucket[e.id]; if(v) counts[v]++; });
+      var faltasTotales = faltasEquivalentes(counts.A, counts.R);
+      var htmlFin = '<div class="card completo">';
+      htmlFin += "<h3>Segundo pase completo</h3>";
+      htmlFin += '<p class="helptext">'+esc(g.nombre)+' — '+displayFecha(pasarFecha)+'</p>';
+      htmlFin += '<div class="resumen-final">';
+      htmlFin += '<span><b style="color:var(--presente)">'+counts.P+'</b>presentes</span>';
+      htmlFin += '<span><b style="color:var(--falta)">'+faltasTotales+'</b>faltas equivalentes</span>';
+      htmlFin += '<span><b style="color:var(--retardo)">'+counts.R+'</b>retardos</span>';
+      htmlFin += "</div>";
+      htmlFin += '<p class="helptext">Cada 3 retardos se convierten en 1 falta.</p>';
+      htmlFin += '<div class="row" style="justify-content:center;">';
+      htmlFin += '<button class="btn secondary" id="btnRevisarLista">Revisar y corregir</button>';
+      htmlFin += '<button class="btn secondary" id="btnReiniciarLista">Empezar de nuevo</button>';
+      htmlFin += "</div></div>";
+      return htmlFin;
+    }
+
+    var estId = pasarSegundaLista[pasarSegundaIndex];
+    var est = g.estudiantes.find(function(e){ return e.id === estId; });
+    if(!est){
+      pasarSegundaIndex++;
+      return renderSegundoPase(g, bucket);
+    }
+    var pct = Math.round((pasarSegundaIndex / pasarSegundaLista.length) * 100);
+
+    var htmlTarjeta = '<div class="progreso">';
+    htmlTarjeta += '<div style="flex:1;"><div class="progreso-texto">Segundo pase — '+(pasarSegundaIndex+1)+' de '+pasarSegundaLista.length+'</div><div class="barra"><div class="barra-fill" style="width:'+pct+'%;"></div></div></div>';
+    htmlTarjeta += "</div>";
+
+    htmlTarjeta += '<div class="tarjeta">';
+    htmlTarjeta += '<div class="num-lista">Marcado como falta</div>';
+    htmlTarjeta += '<div class="nombre-grande">'+esc(est.nombre)+'</div>';
+    htmlTarjeta += '<div class="botones-estado">';
+    htmlTarjeta += '<button class="btn-estado retardo" data-marcar-segunda="R">Llegó (Retardo)</button>';
+    htmlTarjeta += '<button class="btn-estado falta" data-marcar-segunda="A">Sigue de falta</button>';
+    htmlTarjeta += "</div>";
+    htmlTarjeta += '<div class="fila-secundaria">';
+    htmlTarjeta += '<button class="link-sutil" id="btnAnteriorSegunda" '+(pasarSegundaIndex===0?"disabled":"")+'>‹ Anterior</button>';
+    htmlTarjeta += '<button class="link-sutil" id="btnSaltarSegunda">Omitir por ahora</button>';
+    htmlTarjeta += "</div></div>";
+    return htmlTarjeta;
+  }
+
   // =========================================================
   // HISTORIAL
   // =========================================================
@@ -461,16 +593,22 @@
     var g = grupoActivo();
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
 
-    var fechas = fechasDelGrupo(g.id).filter(function(f){
+    var todasFechas = fechasDelGrupo(g.id);
+    var fechas = todasFechas.filter(function(f){
       if(histDesde && f < histDesde) return false;
       if(histHasta && f > histHasta) return false;
       return true;
     });
-    var resumen = {P:0, A:0, R:0};
+    var resumen = {P:0, A:0, R:0, J:0};
     fechas.forEach(function(fecha){
       Object.keys(state.asistencias[g.id][fecha] || {}).forEach(function(estudianteId){
         var estado = state.asistencias[g.id][fecha][estudianteId];
-        if(resumen[estado] !== undefined) resumen[estado]++;
+        if(estado === "A" && esJustificada(g.id, fecha, estudianteId)){
+          resumen.J++;
+          resumen.P++;
+        } else if(resumen[estado] !== undefined){
+          resumen[estado]++;
+        }
       });
     });
 
@@ -486,17 +624,20 @@
     html += '<div class="summary-P"><strong>'+resumen.P+'</strong><span> asistencias</span></div>';
     html += '<div class="summary-A"><strong>'+faltasEquivalentes(resumen.A, resumen.R)+'</strong><span> faltas equivalentes</span></div>';
     html += '<div class="summary-R"><strong>'+resumen.R+'</strong><span> retardos</span></div>';
+    html += '<div class="summary-J"><strong>'+resumen.J+'</strong><span> justificadas</span></div>';
     html += '</div>';
     html += '<div class="hist-toolbar">';
-    html += '<div class="field" style="margin-bottom:0;"><label for="histDesde">Desde (dd/mm/aaaa)</label><input type="text" id="histDesde" value="'+displayFecha(histDesde)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
-    html += '<div class="field" style="margin-bottom:0;"><label for="histHasta">Hasta (dd/mm/aaaa)</label><input type="text" id="histHasta" value="'+displayFecha(histHasta)+'" placeholder="dd/mm/aaaa" inputmode="numeric" maxlength="10"></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="histDesde">Desde</label><input type="date" id="histDesde" value="'+histDesde+'"></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="histHasta">Hasta</label><input type="date" id="histHasta" value="'+histHasta+'"></div>';
     html += '<button class="btn secondary" id="btnLimpiarFiltro">Quitar filtro</button>';
     html += "</div>";
-    html += '<div class="hist-legend"><span><b class="legend-P">1</b> Asistencia</span><span><b class="legend-A">0</b> Falta</span><span><b class="legend-R">2</b> Retardo</span></div>';
-    html += '<p class="helptext hist-rule">Cada 3 retardos se convierten en 1 falta equivalente.</p>';
+    html += '<div class="hist-legend"><span><b class="legend-P">1</b> Asistencia</span><span><b class="legend-A">0</b> Falta</span><span><b class="legend-R">2</b> Retardo</span><span><b class="legend-J">J</b> Falta justificada</span></div>';
+    html += '<p class="helptext hist-rule">Cada 3 retardos se convierten en 1 falta equivalente. Toca una falta ("0") en la tabla para marcarla como justificada.</p>';
 
     if(fechas.length === 0 || g.estudiantes.length === 0){
       html += '<p class="empty">Todavía no hay registros de asistencia'+(fechas.length===0?" en este rango de fechas":"")+'.</p></div>';
+      html += renderEditorFechas(g, todasFechas);
+      html += renderJustificantes(g);
       return html;
     }
 
@@ -508,8 +649,12 @@
       var totalP = 0;
       fechas.forEach(function(f){
         var v = (state.asistencias[g.id][f] || {})[e.id] || "";
-        if(v==="P") totalP++;
-        html += '<td class="'+(v?"mark-"+v:"mark-empty")+'">'+(v?ESTADO_VALOR_EXPORT[v]:"–")+"</td>";
+        var justificada = v === "A" && esJustificada(g.id, f, e.id);
+        if(v==="P" || justificada) totalP++;
+        var clase = justificada ? "mark-J" : (v?"mark-"+v:"mark-empty");
+        var texto = justificada ? "J" : (v?ESTADO_VALOR_EXPORT[v]:"–");
+        var atributos = (v==="A") ? ' data-justificar data-estudiante="'+esc(e.id)+'" data-fecha="'+esc(f)+'" title="Tocar para '+(justificada?"quitar el justificante":"marcar como justificada")+'"' : '';
+        html += '<td class="'+clase+'"'+atributos+'>'+texto+"</td>";
       });
       html += "<td><b>"+totalP+"</b></td></tr>";
     });
@@ -518,9 +663,59 @@
     html += '<div class="hist-actions">';
     html += '<button class="btn" id="btnCopiarExcel">Copiar para pegar en Excel</button>';
     html += '<button class="btn secondary" id="btnDescargarXlsx">Descargar Excel institucional</button>';
-    html += '<button class="btn" id="btnActualizarDrive">'+(driveFileId ? "Actualizar en Google Drive" : "Guardar en Google Drive")+'</button>';
+    html += botonActualizarDrive();
     html += "</div>";
     html += '<p class="helptext">La primera vez se guarda el archivo institucional en Drive. Después, "Actualizar en Google Drive" modifica ese mismo archivo.</p>';
+    html += "</div>";
+    html += renderEditorFechas(g, todasFechas);
+    html += renderJustificantes(g);
+    return html;
+  }
+
+  function renderEditorFechas(g, todasFechas){
+    if(todasFechas.length === 0) return "";
+    var html = '<div class="card">';
+    html += "<h2>Editar o eliminar una fecha</h2>";
+    html += '<p class="helptext" style="margin-top:0;">Corrige una fecha capturada por error o borra por completo el registro de un día.</p>';
+    html += '<div class="field"><label for="selFechaEditar">Fecha registrada</label><select id="selFechaEditar">';
+    todasFechas.forEach(function(f){
+      html += '<option value="'+esc(f)+'">'+displayFecha(f)+'</option>';
+    });
+    html += "</select></div>";
+    html += '<div class="row">';
+    html += '<div class="field" style="flex:1;min-width:180px;margin-bottom:0;"><label for="inputFechaEditarNueva">Cambiar a esta fecha</label><input type="date" id="inputFechaEditarNueva"></div>';
+    html += '<button class="btn secondary" id="btnCambiarFecha">Cambiar fecha</button>';
+    html += '<button class="btn danger" id="btnEliminarFecha">Eliminar esta fecha</button>';
+    html += "</div>";
+    html += '<p class="helptext">Eliminar quita las marcas de ese día en la app y las borra del Excel institucional en la próxima sincronización; no elimina físicamente la columna del archivo.</p>';
+    html += "</div>";
+    return html;
+  }
+
+  function renderJustificantes(g){
+    var todasFechas = fechasDelGrupo(g.id);
+    if(todasFechas.length === 0) return "";
+    var lista = [];
+    var porFecha = state.justificantes[g.id] || {};
+    Object.keys(porFecha).sort().forEach(function(fecha){
+      Object.keys(porFecha[fecha]).forEach(function(estId){
+        var est = g.estudiantes.find(function(e){ return e.id === estId; });
+        if(!est) return;
+        lista.push({fecha:fecha, estudianteId:estId, nombre:est.nombre, nota:(porFecha[fecha][estId]||{}).nota || ""});
+      });
+    });
+    var html = '<div class="card">';
+    html += "<h2>Justificantes</h2>";
+    html += '<p class="helptext" style="margin-top:0;">Toca una falta ("0") en la tabla de arriba para marcarla como justificada: cuenta como asistencia y queda etiquetada con "J". En el Excel institucional se guarda como asistencia (1), con una nota adjunta en la celda.</p>';
+    if(lista.length === 0){
+      html += '<p class="empty">No hay faltas justificadas todavía.</p>';
+    } else {
+      html += '<ul class="estudiantes">';
+      lista.forEach(function(item){
+        html += '<li><span><b>'+esc(item.nombre)+'</b> — '+displayFecha(item.fecha)+(item.nota?' <span class="helptext">('+esc(item.nota)+')</span>':'')+'</span><button class="btn danger" data-quitar-justificante data-estudiante="'+esc(item.estudianteId)+'" data-fecha="'+esc(item.fecha)+'">Quitar</button></li>';
+      });
+      html += "</ul>";
+    }
     html += "</div>";
     return html;
   }
@@ -538,8 +733,9 @@
       var row = [e.nombre], totalP = 0;
       fechas.forEach(function(f){
         var v = (state.asistencias[g.id][f] || {})[e.id] || "";
-        if(v==="P") totalP++;
-        row.push(v ? ESTADO_VALOR_EXPORT[v] : "");
+        var justificada = v === "A" && esJustificada(g.id, f, e.id);
+        if(v==="P" || justificada) totalP++;
+        row.push(justificada ? ESTADO_VALOR_EXPORT.P : (v ? ESTADO_VALOR_EXPORT[v] : ""));
       });
       row.push(totalP);
       rows.push(row);
@@ -569,21 +765,262 @@
     return limpio;
   }
 
-  async function crearBufferPlantillaInstitucional(){
-    plantillaExcel.worksheets.forEach(function(ws){
-      var grupo = state.grupos.find(function(g){ return g.nombre.trim().toLowerCase() === ws.name.trim().toLowerCase(); });
-      if(!grupo) return;
+  // Clona la hoja "Plantilla" completa (logo, estilos, combinaciones, columnas
+  // Grupo/No. Equipo/Evaluación) para un grupo que todavía no tiene pestaña propia.
+  function clonarHojaDesdePlantilla(wb, nombreNuevo){
+    var plantilla = obtenerHojaPlantilla(wb);
+    if(!plantilla) return null;
+    var nueva = wb.addWorksheet(nombreNuevo);
 
-      var headerRow = -1, nameCol = -1, maxRow = Math.min(ws.rowCount, 60), maxCol = Math.min(ws.columnCount, 70);
-      for(var r=1; r<=maxRow && headerRow===-1; r++){
-        for(var c=1; c<=maxCol; c++){
-          var etiqueta = normalizaEtiqueta(ws.getRow(r).getCell(c).value);
-          if(esEncabezadoAlumno(etiqueta)){
-            headerRow = r; nameCol = c; break;
+    var maxFila = Math.max(plantilla.rowCount, 50);
+    var maxColumna = Math.max(plantilla.columnCount, 50);
+
+    for(var c=1; c<=maxColumna; c++){
+      var colOrigen = plantilla.getColumn(c);
+      if(colOrigen && colOrigen.width) nueva.getColumn(c).width = colOrigen.width;
+    }
+
+    for(var r=1; r<=maxFila; r++){
+      var filaOrigen = plantilla.getRow(r);
+      var filaNueva = nueva.getRow(r);
+      for(var c2=1; c2<=maxColumna; c2++){
+        var celdaOrigen = filaOrigen.getCell(c2);
+        var celdaNueva = filaNueva.getCell(c2);
+        celdaNueva.value = celdaOrigen.value;
+        if(celdaOrigen.style) celdaNueva.style = JSON.parse(JSON.stringify(celdaOrigen.style));
+      }
+      if(filaOrigen.height) filaNueva.height = filaOrigen.height;
+    }
+
+    ((plantilla.model && plantilla.model.merges) || []).forEach(function(rango){
+      try{ nueva.mergeCells(rango); }catch(e){}
+    });
+
+    if(plantilla.getImages){
+      plantilla.getImages().forEach(function(img){
+        try{ nueva.addImage(img.imageId, img.range); }catch(e){}
+      });
+    }
+
+    return nueva;
+  }
+
+  // Detecta hasta qué columna llega el bloque "ASISTENCIAS" (a partir de su
+  // combinación de celdas) para nunca escribir fechas nuevas dentro de "EVALUACIÓN".
+  function limiteColumnaAsistencias(ws, headerRow, nameCol, maxCol){
+    var filaBanner = headerRow - 1;
+    if(filaBanner < 1) return null;
+    for(var c=nameCol+1; c<=maxCol; c++){
+      var celda = ws.getRow(filaBanner).getCell(c);
+      if(normalizaEtiqueta(celda.value).indexOf("ASISTENCIA") !== -1){
+        var direccion = celda.address;
+        var merges = (ws.model && ws.model.merges) || [];
+        for(var i=0; i<merges.length; i++){
+          var partes = merges[i].split(":");
+          if(partes[0] === direccion){
+            var colLetra = partes[1].match(/[A-Z]+/);
+            if(colLetra) return columnaDesdeLetra(colLetra[0]);
           }
         }
+        return c;
       }
-      if(headerRow === -1) return;
+    }
+    return null;
+  }
+
+  // Ubica la fila/columna del encabezado "ALUMNO" en una hoja institucional.
+  function encontrarEncabezadoAlumno(ws, maxRowBusqueda, maxColBusqueda){
+    var maxRow = Math.min(ws.rowCount, maxRowBusqueda || 60);
+    var maxCol = Math.min(ws.columnCount, maxColBusqueda || 70);
+    for(var r=1; r<=maxRow; r++){
+      for(var c=1; c<=maxCol; c++){
+        var etiqueta = normalizaEtiqueta(ws.getRow(r).getCell(c).value);
+        if(esEncabezadoAlumno(etiqueta)) return {headerRow:r, nameCol:c, maxCol:maxCol};
+      }
+    }
+    return null;
+  }
+
+  // Quita por completo una fecha de la hoja de un grupo: recorre hacia la
+  // izquierda todas las fechas posteriores (encabezado + las 32 filas de
+  // alumnos) para que no quede una columna vacía en medio de "ASISTENCIAS".
+  function eliminarFechaDeHoja(ws, headerRow, nameCol, maxCol, fechaISO){
+    var columnasFecha = [];
+    for(var c=nameCol+1; c<=maxCol; c++){
+      var v = ws.getRow(headerRow).getCell(c).value;
+      if(v instanceof Date){
+        var iso = v.getUTCFullYear() + "-" + String(v.getUTCMonth()+1).padStart(2,"0") + "-" + String(v.getUTCDate()).padStart(2,"0");
+        columnasFecha.push({col:c, iso:iso});
+      }
+    }
+    var idx = columnasFecha.findIndex(function(cf){ return cf.iso === fechaISO; });
+    if(idx === -1) return false;
+
+    var maxFilaAlumno = headerRow + 32;
+    for(var i=idx+1; i<columnasFecha.length; i++){
+      var colOrigen = columnasFecha[i].col;
+      var colDestino = colOrigen - 1;
+      for(var fila=headerRow; fila<=maxFilaAlumno; fila++){
+        var celdaOrigen = ws.getRow(fila).getCell(colOrigen);
+        var celdaDestino = ws.getRow(fila).getCell(colDestino);
+        celdaDestino.value = celdaOrigen.value;
+        celdaDestino.numFmt = celdaOrigen.numFmt;
+      }
+    }
+    var ultimaColUsada = columnasFecha[columnasFecha.length - 1].col;
+    for(var fila2=headerRow; fila2<=maxFilaAlumno; fila2++){
+      ws.getRow(fila2).getCell(ultimaColUsada).value = null;
+    }
+    return true;
+  }
+
+  // Detecta columnas de fecha que ya no tienen ninguna marca de asistencia en
+  // ningún alumno (por ejemplo, columnas que quedaron vacías tras corregir
+  // registros a mano) y las quita, recorriendo hacia la izquierda las columnas
+  // siguientes para no dejar huecos en el bloque de "ASISTENCIAS". Se usa en
+  // cada sincronización para mantener las columnas organizadas sin tener que
+  // borrar fecha por fecha manualmente.
+  function compactarColumnasVacias(ws, headerRow, nameCol, maxColBusqueda){
+    var maxFilaAlumno = headerRow + 32;
+    var columnasFecha = [];
+    for(var c=nameCol+1; c<=maxColBusqueda; c++){
+      var v = ws.getRow(headerRow).getCell(c).value;
+      if(v instanceof Date) columnasFecha.push(c);
+    }
+    if(columnasFecha.length === 0) return 0;
+
+    var conservar = columnasFecha.filter(function(col){
+      for(var fila=headerRow+1; fila<=maxFilaAlumno; fila++){
+        var val = ws.getRow(fila).getCell(col).value;
+        if(val !== null && val !== undefined && val !== "") return true;
+      }
+      return false;
+    });
+    if(conservar.length === columnasFecha.length) return 0;
+
+    var snapshot = {};
+    conservar.forEach(function(col){
+      for(var fila2=headerRow; fila2<=maxFilaAlumno; fila2++){
+        var celda = ws.getRow(fila2).getCell(col);
+        snapshot[col+"_"+fila2] = {value: celda.value, numFmt: celda.numFmt};
+      }
+    });
+
+    var primerCol = columnasFecha[0];
+    var ultimaCol = columnasFecha[columnasFecha.length-1];
+    conservar.forEach(function(colOriginal, indice){
+      var colDestino = primerCol + indice;
+      for(var fila3=headerRow; fila3<=maxFilaAlumno; fila3++){
+        var datos = snapshot[colOriginal+"_"+fila3];
+        var celdaDestino = ws.getRow(fila3).getCell(colDestino);
+        celdaDestino.value = datos.value;
+        celdaDestino.numFmt = datos.numFmt;
+      }
+    });
+    for(var colLimpiar=primerCol+conservar.length; colLimpiar<=ultimaCol; colLimpiar++){
+      for(var fila4=headerRow; fila4<=maxFilaAlumno; fila4++){
+        ws.getRow(fila4).getCell(colLimpiar).value = null;
+      }
+    }
+    return columnasFecha.length - conservar.length;
+  }
+
+  // Aplica eliminarFechaDeHoja sobre la hoja real del grupo en el archivo
+  // institucional cargado en memoria, y refresca la copia local en caché.
+  async function eliminarFechaDelExcelInstitucional(nombreGrupo, fechaISO){
+    if(!plantillaExcel) return;
+    var ws = plantillaExcel.worksheets.find(function(hoja){
+      return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === nombreGrupo.trim().toLowerCase();
+    });
+    if(!ws) return;
+    var encabezado = encontrarEncabezadoAlumno(ws, 60, 70);
+    if(!encabezado) return;
+    var eliminado = eliminarFechaDeHoja(ws, encabezado.headerRow, encabezado.nameCol, encabezado.maxCol, fechaISO);
+    if(!eliminado) return;
+    try{
+      var buffer = await plantillaExcel.xlsx.writeBuffer();
+      await guardarPlantillaLocal(buffer);
+    }catch(error){ console.error("No se pudo refrescar la copia local del archivo institucional", error); }
+  }
+
+  // Cambia el encabezado de una columna de fecha existente por otra fecha,
+  // sin mover columnas (solo se sustituye el valor del encabezado).
+  function renombrarFechaEnHoja(ws, headerRow, nameCol, maxCol, fechaVieja, fechaNueva){
+    for(var c=nameCol+1; c<=maxCol; c++){
+      var celda = ws.getRow(headerRow).getCell(c);
+      var v = celda.value;
+      if(v instanceof Date){
+        var iso = v.getUTCFullYear() + "-" + String(v.getUTCMonth()+1).padStart(2,"0") + "-" + String(v.getUTCDate()).padStart(2,"0");
+        if(iso === fechaVieja){
+          celda.value = excelFechaSerial(fechaNueva);
+          celda.numFmt = "dd/mm/yyyy";
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async function renombrarFechaDelExcelInstitucional(nombreGrupo, fechaVieja, fechaNueva){
+    if(!plantillaExcel) return;
+    var ws = plantillaExcel.worksheets.find(function(hoja){
+      return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === nombreGrupo.trim().toLowerCase();
+    });
+    if(!ws) return;
+    var encabezado = encontrarEncabezadoAlumno(ws, 60, 70);
+    if(!encabezado) return;
+    var cambiado = renombrarFechaEnHoja(ws, encabezado.headerRow, encabezado.nameCol, encabezado.maxCol, fechaVieja, fechaNueva);
+    if(!cambiado) return;
+    try{
+      var buffer = await plantillaExcel.xlsx.writeBuffer();
+      await guardarPlantillaLocal(buffer);
+    }catch(error){ console.error("No se pudo refrescar la copia local del archivo institucional", error); }
+  }
+
+  async function crearBufferPlantillaInstitucional(){
+    var usados = {};
+    plantillaExcel.worksheets.forEach(function(ws){ usados[ws.name] = true; });
+    var avisos = [], gruposNuevos = [];
+
+    var grupoSeleccionado = grupoActivo();
+    var gruposASincronizar = grupoSeleccionado ? [grupoSeleccionado] : [];
+
+    gruposASincronizar.forEach(function(grupo){
+      var ws = plantillaExcel.worksheets.find(function(hoja){
+        return !esHojaPlantilla(hoja.name) && hoja.name.trim().toLowerCase() === grupo.nombre.trim().toLowerCase();
+      });
+
+      if(!ws){
+        ws = clonarHojaDesdePlantilla(plantillaExcel, nombreHojaValido(grupo.nombre, usados));
+        if(!ws){
+          avisos.push('No se encontró la pestaña "Plantilla" en el archivo institucional; no se pudo crear la hoja de "'+grupo.nombre+'".');
+          return;
+        }
+        gruposNuevos.push(grupo.nombre);
+      }
+
+      var encabezado = encontrarEncabezadoAlumno(ws, 60, 70);
+      if(!encabezado){
+        avisos.push('No se reconoció el formato de la hoja "'+ws.name+'"; no se actualizó.');
+        return;
+      }
+      var headerRow = encabezado.headerRow, nameCol = encabezado.nameCol, maxCol = encabezado.maxCol;
+
+      // Antes de tocar nada más, quitamos columnas de fecha que hayan quedado
+      // completamente vacías (sin ninguna marca en ningún alumno) y recorremos
+      // el resto hacia la izquierda, para que "Actualizar" también organice
+      // las columnas en vez de dejar huecos entre las fechas reales.
+      var columnasVaciasEliminadas = compactarColumnasVacias(ws, headerRow, nameCol, maxCol);
+      if(columnasVaciasEliminadas > 0){
+        avisos.push('Se organizaron las columnas de "'+grupo.nombre+'": se quitaron '+columnasVaciasEliminadas+' columna(s) de fecha vacía(s).');
+      }
+
+      // Profesor y Materia viven siempre en la misma columna que la respuesta,
+      // 8 y 3 filas arriba del encabezado "ALUMNO" respectivamente. No se
+      // sobreescriben si el grupo no tiene el dato capturado en la app.
+      var colValor = nameCol + 7;
+      if(grupo.profesor && headerRow-8 >= 1) ws.getRow(headerRow-8).getCell(colValor).value = grupo.profesor;
+      if(grupo.materia && headerRow-3 >= 1) ws.getRow(headerRow-3).getCell(colValor).value = grupo.materia;
 
       var fechas = {};
       var totalCol = -1;
@@ -597,18 +1034,26 @@
           break;
         }
       }
-      var fechasEstado = Object.keys(state.asistencias[grupo.id] || {}).sort();
+
+      var limiteAsistencia = limiteColumnaAsistencias(ws, headerRow, nameCol, maxCol);
+      // Solo se agregan columnas para fechas que tengan al menos una marca.
+      var fechasEstado = fechasDelGrupo(grupo.id);
       var ultimaColumnaFecha = Object.keys(fechas).reduce(function(maximo, col){ return Math.max(maximo, Number(col)); }, nameCol + 2);
+      var fechasOmitidas = [];
       fechasEstado.forEach(function(iso){
         var existe = Object.keys(fechas).some(function(col){ return fechas[col] === iso; });
         if(existe) return;
-        ultimaColumnaFecha++;
+        var siguiente = ultimaColumnaFecha + 1;
+        if(limiteAsistencia && siguiente > limiteAsistencia){ fechasOmitidas.push(iso); return; }
+        ultimaColumnaFecha = siguiente;
         fechas[ultimaColumnaFecha] = iso;
         var headerCell = ws.getRow(headerRow).getCell(ultimaColumnaFecha);
         headerCell.value = excelFechaSerial(iso);
         headerCell.numFmt = "dd/mm/yyyy";
-        ws.getColumn(ultimaColumnaFecha).width = 6;
       });
+      if(fechasOmitidas.length){
+        avisos.push('El grupo "'+grupo.nombre+'" ya no tiene columnas de asistencia libres en la plantilla; no se guardaron '+fechasOmitidas.length+' fecha(s).');
+      }
 
       var estudiantesOrdenados = grupo.estudiantes.slice().sort(function(a, b){
         return a.nombre.localeCompare(b.nombre, "es", {sensitivity:"base"});
@@ -618,67 +1063,156 @@
         var filaAlumno = ws.getRow(rowNumber);
         filaAlumno.getCell(nameCol).value = est.nombre;
         if(nameCol > 0 && !filaAlumno.getCell(nameCol - 1).value){
-          filaAlumno.getCell(nameCol - 1).value = rowNumber - headerRow;
+          filaAlumno.getCell(nameCol - 1).value = indice + 1;
         }
         var totalP = 0;
         Object.keys(fechas).forEach(function(colText){
-          var col = Number(colText), estado = (state.asistencias[grupo.id][fechas[col]] || {})[est.id] || "";
+          var col = Number(colText), fechaIso = fechas[col];
+          var estado = leerAsistenciaBucket(grupo.id, fechaIso)[est.id] || "";
+          var justificada = estado === "A" && esJustificada(grupo.id, fechaIso, est.id);
           var cell = ws.getRow(rowNumber).getCell(col);
-          cell.value = estado ? ESTADO_VALOR_EXPORT[estado] : null;
-          if(estado === "P") totalP++;
+          cell.value = justificada ? ESTADO_VALOR_EXPORT.P : (estado ? ESTADO_VALOR_EXPORT[estado] : null);
+          if(justificada){
+            var nota = notaJustificante(grupo.id, fechaIso, est.id);
+            cell.note = "Falta justificada" + (nota ? ": " + nota : "");
+          } else {
+            cell.note = undefined;
+          }
+          if(estado === "P" || justificada) totalP++;
         });
         if(totalCol !== -1) ws.getRow(rowNumber).getCell(totalCol).value = totalP;
       });
       Object.keys(fechas).forEach(function(colText){
         var fechaCell = ws.getRow(headerRow).getCell(Number(colText));
         fechaCell.numFmt = "dd/mm/yyyy";
-        ws.getColumn(Number(colText)).width = 6;
       });
     });
 
-    return await plantillaExcel.xlsx.writeBuffer();
+    if(gruposNuevos.length){
+      avisos.unshift("Se crearon en el archivo institucional las pestañas: " + gruposNuevos.join(", ") + ".");
+    }
+
+    var buffer = await plantillaExcel.xlsx.writeBuffer();
+    return { buffer: buffer, avisos: avisos };
   }
 
   async function descargarPlantillaInstitucional(){
-    var buffer = await crearBufferPlantillaInstitucional();
-    var blob = new Blob([buffer], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    var resultado = await crearBufferPlantillaInstitucional();
+    var blob = new Blob([resultado.buffer], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
     var url = URL.createObjectURL(blob);
     var link = document.createElement("a");
     link.href = url;
     link.download = "asistencia_institucional_" + todayISO() + ".xlsx";
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    showToast("Archivo institucional descargado sin cambiar su formato.");
+    showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional descargado con el formato original.");
   }
 
+  // ---------------------------------------------------------
+  // GOOGLE IDENTITY SERVICES: carga dinámica con reintentos.
+  // ---------------------------------------------------------
+  // index.html YA NO incluye <script src="https://accounts.google.com/gsi/client">
+  // de forma estática (un solo fallo de red en ese punto dejaba "window.google"
+  // indefinido para siempre, y todos los botones de Drive mostraban "revisa tu
+  // conexión" aunque el usuario sí tuviera internet). En su lugar, esta función
+  // inyecta el <script> por código, y si falla (red lenta, DNS, corte momentáneo)
+  // reintenta varias veces con espera creciente antes de rendirse.
+  var GOOGLE_GSI_SRC = "https://accounts.google.com/gsi/client";
+  var googleIdentityPromise = null; // evita cargas duplicadas si hay varios clics
+
+  // Revisa si la librería de Google ya quedó disponible en window.
+  function gsiListo(){
+    return !!(window.google && google.accounts && google.accounts.oauth2);
+  }
+
+  // Pequeña ayuda para esperar N milisegundos dentro de una función async.
+  function esperar(ms){
+    return new Promise(function(resolve){ setTimeout(resolve, ms); });
+  }
+
+  // Inyecta el <script> de Google Identity Services una vez y resuelve/rechaza
+  // según si terminó de cargar (onload) o falló la petición de red (onerror).
+  function cargarScriptGoogle(){
+    return new Promise(function(resolve, reject){
+      if(gsiListo()){ resolve(); return; }
+      // Si quedó un <script> de un intento fallido anterior, lo quitamos para
+      // forzar una petición de red nueva en vez de que el navegador reutilice
+      // una respuesta de error en caché.
+      document.querySelectorAll('script[data-gsi="1"]').forEach(function(s){ s.remove(); });
+      var script = document.createElement("script");
+      script.src = GOOGLE_GSI_SRC + "?_=" + Date.now(); // cache-bust por intento
+      script.async = true;
+      script.defer = true;
+      script.dataset.gsi = "1";
+      script.onload = function(){
+        if(gsiListo()) resolve();
+        else reject(new Error("Google respondió pero no expuso accounts.oauth2"));
+      };
+      script.onerror = function(){ reject(new Error("Fallo de red cargando el script de Google")); };
+      document.head.appendChild(script);
+    });
+  }
+
+  // Punto de entrada público: asegura que Google Identity Services esté listo,
+  // reintentando hasta "intentos" veces con espera creciente (800ms, 1600ms...)
+  // antes de rendirse. Si ya hay una carga en curso, todos los llamadores
+  // comparten la misma promesa en vez de disparar peticiones duplicadas.
+  function asegurarGoogleIdentity(intentos){
+    if(gsiListo()) return Promise.resolve();
+    if(googleIdentityPromise) return googleIdentityPromise;
+    intentos = intentos || 3;
+    googleIdentityPromise = (async function(){
+      var ultimoError = null;
+      for(var intento=1; intento<=intentos; intento++){
+        try{
+          await cargarScriptGoogle();
+          return;
+        }catch(err){
+          ultimoError = err;
+          if(intento < intentos) await esperar(800 * intento);
+        }
+      }
+      // Se agotaron los intentos: se limpia la promesa para permitir un
+      // reintento fresco la próxima vez que el usuario haga clic.
+      googleIdentityPromise = null;
+      throw ultimoError;
+    })();
+    return googleIdentityPromise;
+  }
+
+  // Inicia el flujo de OAuth de Google Drive. Antes de pedir el token, se
+  // asegura (con reintentos) de que la librería de Google esté cargada; así
+  // un corte de red momentáneo ya no deja el botón inutilizado para siempre.
   function iniciarGoogleDrive(action){
     if(location.protocol === "file:" && !window.Capacitor){
       showToast("Abre FullStatus desde http://localhost para iniciar sesión con Google.");
       return;
     }
-    if(!window.google || !google.accounts || !google.accounts.oauth2){
-      showToast("No se pudo cargar el acceso de Google. Revisa tu conexión.");
-      return;
-    }
     drivePendingAction = action;
-    if(!driveTokenClient){
-      driveTokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
-        callback: function(response){
-          if(response.error){
-            console.error("Error de autorización de Google", response);
-            showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
-            return;
+    asegurarGoogleIdentity().then(function(){
+      if(!driveTokenClient){
+        driveTokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+          callback: function(response){
+            if(response.error){
+              console.error("Error de autorización de Google", response);
+              showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
+              return;
+            }
+            localStorage.setItem(GOOGLE_AUTH_KEY, "1");
+            var pending = drivePendingAction;
+            drivePendingAction = null;
+            if(pending) pending(response.access_token);
           }
-          localStorage.setItem(GOOGLE_AUTH_KEY, "1");
-          var pending = drivePendingAction;
-          drivePendingAction = null;
-          if(pending) pending(response.access_token);
-        }
-      });
-    }
-    driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
+        });
+      }
+      driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
+    }).catch(function(err){
+      // Solo llegamos aquí si TODOS los reintentos de red fallaron.
+      console.error("No se pudo cargar Google Identity Services tras varios intentos", err);
+      showToast("No se pudo conectar con los servicios de Google. Revisa tu conexión a internet e inténtalo de nuevo.");
+    });
   }
 
   function columnaA1(numero){
@@ -712,6 +1246,7 @@
     var workbook = await descargarWorkbookInstitucional(accessToken);
     var grupos = [], asistencias = {};
     workbook.worksheets.forEach(function(ws){
+      if(esHojaPlantilla(ws.name)) return;
       var datos = extraerGrupoDeHoja(ws);
       if(!datos){
         var grupoVacioId = uid();
@@ -759,6 +1294,7 @@
 
     for(var sheetIndex=0; sheetIndex<metadata.sheets.length; sheetIndex++){
       var title = metadata.sheets[sheetIndex].properties.title;
+      if(esHojaPlantilla(title)) continue;
       var range = encodeURIComponent("'"+title.replace(/'/g,"''")+"'!A1:ZZ500");
       var valuesResponse = await fetch("https://sheets.googleapis.com/v4/spreadsheets/"+encodeURIComponent(GOOGLE_SHEET_ID)+"/values/"+range, {
         headers: {Authorization:"Bearer "+accessToken}
@@ -854,6 +1390,7 @@
 
     for(var i=0; i<metadata.sheets.length; i++){
       var sheetProperties = metadata.sheets[i].properties, title = sheetProperties.title;
+      if(esHojaPlantilla(title)) continue;
       var grupo = state.grupos.find(function(g){ return normalizaNombre(g.nombre) === normalizaNombre(title); });
       if(!grupo) continue;
       matchedGroups++;
@@ -944,16 +1481,23 @@
       if(fileInfo.ok){
         var fileMetadata = await fileInfo.json();
         if(fileMetadata.mimeType !== "application/vnd.google-apps.spreadsheet"){
-          await descargarWorkbookInstitucional(accessToken);
-          var buffer = await crearBufferPlantillaInstitucional();
+          // Antes se volvía a descargar el archivo de Drive siempre, lo que
+          // sobreescribía en memoria cualquier edición local aún no subida
+          // (fechas eliminadas/renombradas, columnas recién organizadas) con
+          // la versión vieja que sigue en Drive. Ahora solo se descarga si
+          // todavía no tenemos ninguna copia cargada en este dispositivo.
+          if(!plantillaExcel){
+            await descargarWorkbookInstitucional(accessToken);
+          }
+          var resultado = await crearBufferPlantillaInstitucional();
           var upload = await fetch("https://www.googleapis.com/upload/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?uploadType=media", {
-            method:"PATCH", headers:{Authorization:"Bearer "+accessToken, "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, body:buffer
+            method:"PATCH", headers:{Authorization:"Bearer "+accessToken, "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, body:resultado.buffer
           });
           if(!upload.ok){
             var uploadDetail = await upload.text();
             throw new Error("No se pudo actualizar el Excel institucional (HTTP "+upload.status+"): "+uploadDetail.slice(0,160));
           }
-          showToast("Archivo institucional actualizado en Drive.");
+          showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional actualizado en Drive.");
           return true;
         }
       }
@@ -976,120 +1520,25 @@
       guardarEnGoogleDrive(accessToken).then(function(ok){ if(ok) marcarSincronizado(); });
     });
   }
-
-  async function descargarXlsxCompleto(){
-    if(plantillaExcel){
-      try{
-        await descargarPlantillaInstitucional();
-      }catch(err){
-        console.error(err);
-        showToast("No se pudo actualizar el archivo institucional.");
-      }
+  function autoSincronizarCambios(){
+    if(!cambiosPendientes) return;
+    if(!navigator.onLine){
+      showToast("Sin conexión: se guardó en este dispositivo y se subirá a Drive automáticamente cuando vuelva internet.");
       return;
     }
-    showToast("Generando archivo…");
-    var wb = new ExcelJS.Workbook();
-    var usados = {};
-    var colorBanda = "FFCCCCCC", colorFecha = "FF92D050";
+    sincronizarPendientes();
+  }
 
-    state.grupos.forEach(function(g){
-      var fechas = fechasDelGrupo(g.id);
-      var ws = wb.addWorksheet(nombreHojaValido(g.nombre, usados));
-
-      ws.mergeCells(1,1,1,3+fechas.length);
-      var titulo = ws.getCell(1,1);
-      titulo.value = "LISTA - ACTA DE ASISTENCIA";
-      titulo.font = {name:"Arial", size:12, bold:true};
-      titulo.alignment = {horizontal:"center", vertical:"middle"};
-
-      var filaMeta = 2;
-      ws.getCell(filaMeta,1).value = "Grupo:";
-      ws.getCell(filaMeta,1).font = {name:"Arial", size:10, bold:true};
-      ws.getCell(filaMeta,2).value = g.nombre;
-      ws.getCell(filaMeta,2).font = {name:"Arial", size:10};
-      if(g.materia){
-        ws.getCell(filaMeta,4).value = "Materia:";
-        ws.getCell(filaMeta,4).font = {name:"Arial", size:10, bold:true};
-        ws.getCell(filaMeta,5).value = g.materia;
-        ws.getCell(filaMeta,5).font = {name:"Arial", size:10};
-      }
-      if(g.profesor){
-        var filaProf = 3;
-        ws.getCell(filaProf,1).value = "Profesor:";
-        ws.getCell(filaProf,1).font = {name:"Arial", size:10, bold:true};
-        ws.getCell(filaProf,2).value = g.profesor;
-        ws.getCell(filaProf,2).font = {name:"Arial", size:10};
-      }
-
-      var filaHeader = g.profesor ? 5 : 4;
-      var hNo = ws.getCell(filaHeader,1), hAlumno = ws.getCell(filaHeader,2);
-      hNo.value = "No."; hAlumno.value = "ALUMNO";
-      [hNo,hAlumno].forEach(function(c){ c.font={name:"Arial",size:10,bold:true}; c.alignment={horizontal:"center",vertical:"middle"}; });
-      hAlumno.alignment = {horizontal:"left", vertical:"middle"};
-
-      fechas.forEach(function(f, i){
-        var col = 3+i;
-        var cell = ws.getCell(filaHeader, col);
-        var partes = f.split("-").map(Number);
-        cell.value = new Date(partes[0], partes[1]-1, partes[2]);
-        cell.numFmt = "dd/mm/yyyy";
-        cell.font = {name:"Arial", size:9, bold:true};
-        cell.alignment = {horizontal:"center", vertical:"middle", textRotation:90};
-        cell.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorFecha}};
-      });
-      var hTotal = ws.getCell(filaHeader, 3+fechas.length);
-      hTotal.value = "Total presente";
-      hTotal.font = {name:"Arial", size:9, bold:true};
-      hTotal.alignment = {horizontal:"center", vertical:"middle", wrapText:true};
-
-      g.estudiantes.forEach(function(est, i){
-        var fila = filaHeader + 1 + i;
-        var bandear = i % 2 === 0;
-        var celdaNo = ws.getCell(fila,1), celdaNombre = ws.getCell(fila,2);
-        celdaNo.value = i+1;
-        celdaNombre.value = est.nombre;
-        [celdaNo, celdaNombre].forEach(function(c){
-          c.font = {name:"Arial", size:10};
-          if(bandear) c.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-        });
-        celdaNo.alignment = {horizontal:"center"};
-        var totalP = 0;
-        fechas.forEach(function(f, j){
-          var v = (state.asistencias[g.id][f] || {})[est.id] || "";
-          var col = 3+j;
-          var c = ws.getCell(fila, col);
-          if(v){ c.value = ESTADO_VALOR_EXPORT[v]; if(v==="P") totalP++; }
-          c.font = {name:"Arial", size:10};
-          c.alignment = {horizontal:"center"};
-          if(bandear) c.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-        });
-        var cTotal = ws.getCell(fila, 3+fechas.length);
-        cTotal.value = totalP;
-        cTotal.font = {name:"Arial", size:10, bold:true};
-        cTotal.alignment = {horizontal:"center"};
-        if(bandear) cTotal.fill = {type:"pattern", pattern:"solid", fgColor:{argb:colorBanda}};
-      });
-
-      ws.getColumn(1).width = 5;
-      ws.getColumn(2).width = 34;
-      for(var k=0;k<fechas.length;k++) ws.getColumn(3+k).width = 4;
-      ws.getColumn(3+fechas.length).width = 10;
-      ws.getRow(filaHeader).height = 46;
-    });
-
+  async function descargarXlsxCompleto(){
+    if(!plantillaExcel){
+      showToast('Primero carga el archivo institucional desde Google Drive (pestaña "Grupos") para exportar con el formato correcto.');
+      return;
+    }
     try{
-      var buf = await wb.xlsx.writeBuffer();
-      var blob = new Blob([buf], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = "asistencia_" + todayISO() + ".xlsx";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showToast("Archivo descargado.");
+      await descargarPlantillaInstitucional();
     }catch(err){
       console.error(err);
-      showToast("No se pudo generar el archivo de Excel.");
+      showToast("No se pudo actualizar el archivo institucional.");
     }
   }
 
@@ -1110,7 +1559,9 @@
     });
 
     var sel = document.getElementById("selGrupoActivo");
-    if(sel) sel.addEventListener("change", function(){ state.grupoActivoId = sel.value; pasarIndex = null; saveState(); render(); });
+    // Cambiar de grupo es solo navegación: se guarda la selección pero NO se marca
+    // "cambios pendientes" (no hay nada nuevo que subir a Drive).
+    if(sel) sel.addEventListener("change", function(){ state.grupoActivoId = sel.value; pasarIndex = null; saveState(false); render(); });
 
     var btnEliminarGrupo = document.getElementById("btnEliminarGrupo");
     if(btnEliminarGrupo) btnEliminarGrupo.addEventListener("click", function(){
@@ -1118,6 +1569,7 @@
       if(!confirm('¿Eliminar el grupo "'+g.nombre+'" y todos sus registros de asistencia? No se puede deshacer.')) return;
       state.grupos = state.grupos.filter(function(x){ return x.id !== g.id; });
       delete state.asistencias[g.id];
+      delete state.justificantes[g.id];
       state.grupoActivoId = state.grupos.length ? state.grupos[0].id : null;
       pasarIndex = null;
       saveState(); render();
@@ -1179,16 +1631,26 @@
       state.grupoActivoId = selGrupoPasar.value;
       pasarIndex = null;
       pasarViewMode = "card";
-      saveState();
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
+      saveState(false); // solo navegación, no es un cambio de asistencia
       render();
     });
     var inputFecha = document.getElementById("inputFechaLista");
     if(inputFecha) inputFecha.addEventListener("change", function(){
-      var fecha = parseFechaMX(inputFecha.value);
-      if(!fecha){ showToast("Escribe la fecha como dd/mm/aaaa."); render(); return; }
+      var fecha = inputFecha.value;
+      if(!fecha){ render(); return; }
+      var g = grupoActivo();
+      var yaExiste = g && fechaTieneMarcas(g.id, fecha);
+      if(!yaExiste && g){
+        var confirmado = confirm('¿Agregar el '+displayFecha(fecha)+' como una nueva fecha de asistencia para "'+g.nombre+'"?');
+        if(!confirmado){ render(); return; }
+      }
       pasarFecha = fecha;
       pasarIndex = null;
       pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
       render();
     });
     var btnToggleVista = document.getElementById("btnToggleVista");
@@ -1203,23 +1665,69 @@
         var est = g.estudiantes[pasarIndex];
         bucket[est.id] = btn.getAttribute("data-marcar");
         pasarIndex++;
-        saveState(); render();
+        saveState();
+        if(pasarIndex >= g.estudiantes.length) autoSincronizarCambios();
+        render();
       });
     });
     var btnAnterior = document.getElementById("btnAnterior");
     if(btnAnterior) btnAnterior.addEventListener("click", function(){ if(pasarIndex>0){ pasarIndex--; render(); } });
     var btnSaltar = document.getElementById("btnSaltar");
-    if(btnSaltar) btnSaltar.addEventListener("click", function(){ pasarIndex++; render(); });
+    if(btnSaltar) btnSaltar.addEventListener("click", function(){
+      var g = grupoActivo();
+      pasarIndex++;
+      if(g && pasarIndex >= g.estudiantes.length) autoSincronizarCambios();
+      render();
+    });
+    var btnSegundoPase = document.getElementById("btnSegundoPase");
+    if(btnSegundoPase) btnSegundoPase.addEventListener("click", function(){
+      var g = grupoActivo();
+      var bucket = leerAsistenciaBucket(g.id, pasarFecha);
+      pasarSegundaLista = g.estudiantes.filter(function(e){ return bucket[e.id] === "A"; }).map(function(e){ return e.id; });
+      pasarSegundaIndex = 0;
+      pasarViewMode = "segunda";
+      render();
+    });
+    document.querySelectorAll("[data-marcar-segunda]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+        var estId = pasarSegundaLista[pasarSegundaIndex];
+        bucket[estId] = btn.getAttribute("data-marcar-segunda");
+        pasarSegundaIndex++;
+        saveState();
+        if(pasarSegundaIndex >= pasarSegundaLista.length) autoSincronizarCambios();
+        render();
+      });
+    });
+    var btnAnteriorSegunda = document.getElementById("btnAnteriorSegunda");
+    if(btnAnteriorSegunda) btnAnteriorSegunda.addEventListener("click", function(){ if(pasarSegundaIndex>0){ pasarSegundaIndex--; render(); } });
+    var btnSaltarSegunda = document.getElementById("btnSaltarSegunda");
+    if(btnSaltarSegunda) btnSaltarSegunda.addEventListener("click", function(){
+      pasarSegundaIndex++;
+      if(pasarSegundaLista && pasarSegundaIndex >= pasarSegundaLista.length) autoSincronizarCambios();
+      render();
+    });
+    var btnVolverResumen = document.getElementById("btnVolverResumen");
+    if(btnVolverResumen) btnVolverResumen.addEventListener("click", function(){ pasarViewMode = "card"; render(); });
     var btnRevisarLista = document.getElementById("btnRevisarLista");
     if(btnRevisarLista) btnRevisarLista.addEventListener("click", function(){ pasarViewMode = "list"; render(); });
     var btnReiniciarLista = document.getElementById("btnReiniciarLista");
-    if(btnReiniciarLista) btnReiniciarLista.addEventListener("click", function(){ pasarIndex = 0; render(); });
+    if(btnReiniciarLista) btnReiniciarLista.addEventListener("click", function(){
+      pasarIndex = 0;
+      pasarViewMode = "card";
+      pasarSegundaLista = null;
+      pasarSegundaIndex = null;
+      render();
+    });
     document.querySelectorAll("[data-chip]").forEach(function(chip){
       chip.addEventListener("click", function(){
         var g = grupoActivo();
         var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
         var estId = chip.getAttribute("data-estudiante"), estado = chip.getAttribute("data-estado");
         if(bucket[estId] === estado) delete bucket[estId]; else bucket[estId] = estado;
+        // Si ya no queda ninguna marca, la fecha deja de existir (no queda columna vacía).
+        if(Object.keys(bucket).length === 0) delete state.asistencias[g.id][pasarFecha];
         saveState(); render();
       });
     });
@@ -1229,23 +1737,82 @@
     if(selGrupoHistorial) selGrupoHistorial.addEventListener("change", function(){
       state.grupoActivoId = selGrupoHistorial.value;
       pasarIndex = null;
-      saveState();
+      saveState(false); // solo navegación, no es un cambio de asistencia
       render();
     });
     var hd = document.getElementById("histDesde");
-    if(hd) hd.addEventListener("change", function(){
-      histDesde = hd.value.trim() ? parseFechaMX(hd.value) : "";
-      if(hd.value.trim() && !histDesde){ showToast("Escribe la fecha como dd/mm/aaaa."); histDesde=""; }
-      render();
-    });
+    if(hd) hd.addEventListener("change", function(){ histDesde = hd.value; render(); });
     var hh = document.getElementById("histHasta");
-    if(hh) hh.addEventListener("change", function(){
-      histHasta = hh.value.trim() ? parseFechaMX(hh.value) : "";
-      if(hh.value.trim() && !histHasta){ showToast("Escribe la fecha como dd/mm/aaaa."); histHasta=""; }
-      render();
-    });
+    if(hh) hh.addEventListener("change", function(){ histHasta = hh.value; render(); });
     var btnLimpiarFiltro = document.getElementById("btnLimpiarFiltro");
     if(btnLimpiarFiltro) btnLimpiarFiltro.addEventListener("click", function(){ histDesde=""; histHasta=""; render(); });
+    var btnCambiarFecha = document.getElementById("btnCambiarFecha");
+    if(btnCambiarFecha) btnCambiarFecha.addEventListener("click", function(){
+      var g = grupoActivo();
+      var fechaVieja = document.getElementById("selFechaEditar").value;
+      var fechaNueva = document.getElementById("inputFechaEditarNueva").value;
+      if(!fechaNueva){ showToast("Elige la nueva fecha en el calendario."); return; }
+      if(fechaNueva === fechaVieja){ showToast("Es la misma fecha."); return; }
+      if(fechaTieneMarcas(g.id, fechaNueva)){
+        showToast("Ya existe el "+displayFecha(fechaNueva)+" con datos. Elimínalo primero si quieres reemplazarlo.");
+        return;
+      }
+      if(!confirm('¿Cambiar el '+displayFecha(fechaVieja)+' por el '+displayFecha(fechaNueva)+' en "'+g.nombre+'"?')) return;
+      state.asistencias[g.id][fechaNueva] = state.asistencias[g.id][fechaVieja];
+      delete state.asistencias[g.id][fechaVieja];
+      if(pasarFecha === fechaVieja) pasarFecha = fechaNueva;
+      saveState(); render();
+      renombrarFechaDelExcelInstitucional(g.nombre, fechaVieja, fechaNueva).then(function(){
+        showToast("Fecha actualizada a "+displayFecha(fechaNueva)+".");
+        autoSincronizarCambios();
+      });
+    });
+    var btnEliminarFecha = document.getElementById("btnEliminarFecha");
+    if(btnEliminarFecha) btnEliminarFecha.addEventListener("click", function(){
+      var g = grupoActivo();
+      var fecha = document.getElementById("selFechaEditar").value;
+      if(!confirm('¿Eliminar por completo el '+displayFecha(fecha)+' de "'+g.nombre+'"? Se recorrerán las fechas siguientes en el Excel institucional para no dejar columnas vacías. No se puede deshacer.')) return;
+      delete state.asistencias[g.id][fecha];
+      saveState(); render();
+      eliminarFechaDelExcelInstitucional(g.nombre, fecha).then(function(){
+        showToast("Fecha "+displayFecha(fecha)+" eliminada y columnas recorridas en el Excel.");
+        autoSincronizarCambios();
+      });
+    });
+    document.querySelectorAll("[data-justificar]").forEach(function(celda){
+      celda.addEventListener("click", function(){
+        var g = grupoActivo();
+        var estId = celda.getAttribute("data-estudiante"), fecha = celda.getAttribute("data-fecha");
+        var est = g.estudiantes.find(function(e){ return e.id === estId; });
+        var nombre = est ? est.nombre : "";
+        if(esJustificada(g.id, fecha, estId)){
+          if(!confirm('¿Quitar el justificante de '+nombre+' del '+displayFecha(fecha)+'? Volverá a contar como falta.')) return;
+          delete state.justificantes[g.id][fecha][estId];
+          saveState(); render();
+          showToast("Justificante quitado.");
+          autoSincronizarCambios();
+          return;
+        }
+        if(!confirm('¿Marcar la falta de '+nombre+' del '+displayFecha(fecha)+' como justificada? Contará como asistencia.')) return;
+        var nota = prompt("Motivo del justificante (opcional):", "") || "";
+        var bucket = ensureJustificantesBucket(g.id, fecha);
+        bucket[estId] = {nota: nota.trim()};
+        saveState(); render();
+        showToast("Falta marcada como justificada.");
+        autoSincronizarCambios();
+      });
+    });
+    document.querySelectorAll("[data-quitar-justificante]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var estId = btn.getAttribute("data-estudiante"), fecha = btn.getAttribute("data-fecha");
+        if(!confirm("¿Quitar este justificante? Volverá a contar como falta.")) return;
+        if(state.justificantes[g.id] && state.justificantes[g.id][fecha]) delete state.justificantes[g.id][fecha][estId];
+        saveState(); render();
+        showToast("Justificante quitado.");
+        autoSincronizarCambios();
+      });
+    });
     var btnCopiarExcel = document.getElementById("btnCopiarExcel");
     if(btnCopiarExcel) btnCopiarExcel.addEventListener("click", function(){
       var rows = construirMatrizActiva();
@@ -1281,6 +1848,11 @@
   });
   if(!state.grupoActivoId && state.grupos.length) state.grupoActivoId = state.grupos[0].id;
   updateConn();
+  // Dispara la carga de Google Identity Services desde el arranque (no bloqueante):
+  // así, para cuando el usuario llegue a pulsar "Cargar desde Drive", la librería
+  // ya suele estar lista. Si falla aquí, se reintentará automáticamente en el
+  // primer clic (asegurarGoogleIdentity reutiliza/relanza la carga).
+  asegurarGoogleIdentity().catch(function(){ /* se reintentará al primer clic */ });
   restaurarCacheLocal().then(function(){
     setTab("pasar");
     sincronizarPendientes();

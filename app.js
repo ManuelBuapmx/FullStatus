@@ -38,8 +38,22 @@
       var parsed = JSON.parse(raw);
       if(!parsed.grupos) return defaultState();
       if(!parsed.justificantes) parsed.justificantes = {};
+      if(!parsed.asistencias) parsed.asistencias = {};
+      purgarFechasVacias(parsed);
       return parsed;
     }catch(e){ return defaultState(); }
+  }
+  // Versiones anteriores creaban (y guardaban) un registro vacío de "hoy" con
+  // solo seleccionar un grupo, lo que luego generaba una columna de fecha vacía
+  // en el Excel. Al cargar, se eliminan esos registros sin ninguna marca para
+  // que no vuelvan a aparecer como fechas del grupo.
+  function purgarFechasVacias(estado){
+    Object.keys(estado.asistencias || {}).forEach(function(grupoId){
+      var porFecha = estado.asistencias[grupoId] || {};
+      Object.keys(porFecha).forEach(function(fecha){
+        if(!porFecha[fecha] || Object.keys(porFecha[fecha]).length === 0) delete porFecha[fecha];
+      });
+    });
   }
   function saveState(markPending){
     try{
@@ -134,7 +148,22 @@
     if(!state.asistencias[grupoId][fecha]) state.asistencias[grupoId][fecha] = {};
     return state.asistencias[grupoId][fecha];
   }
-  function fechasDelGrupo(grupoId){ return Object.keys(state.asistencias[grupoId] || {}).sort(); }
+  // Lectura SIN efectos secundarios: devuelve las marcas de una fecha si existen,
+  // o un objeto vacío temporal si no. A diferencia de ensureAsistenciaBucket,
+  // nunca crea la fecha en el estado; así, solo mirar un grupo en la fecha de
+  // hoy ya no genera una columna nueva. La fecha solo nace al registrar una marca.
+  function leerAsistenciaBucket(grupoId, fecha){
+    return (state.asistencias[grupoId] && state.asistencias[grupoId][fecha]) || {};
+  }
+  // Una fecha cuenta como "registrada" únicamente si tiene al menos una marca.
+  function fechaTieneMarcas(grupoId, fecha){
+    return Object.keys(leerAsistenciaBucket(grupoId, fecha)).length > 0;
+  }
+  function fechasDelGrupo(grupoId){
+    return Object.keys(state.asistencias[grupoId] || {}).filter(function(fecha){
+      return fechaTieneMarcas(grupoId, fecha);
+    }).sort();
+  }
   function faltasEquivalentes(faltas, retardos){ return faltas + Math.floor(retardos / 3); }
 
   function ensureJustificantesBucket(grupoId, fecha){
@@ -414,7 +443,8 @@
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
     if(g.estudiantes.length === 0) return '<div class="card">'+renderSelectorGrupoPasar(g)+'<p class="empty">"'+esc(g.nombre)+'" todavía no tiene estudiantes. Agrégalos en la pestaña "Grupos".</p></div>';
 
-    var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+    // Solo lectura: la fecha se crea hasta que se marca al primer alumno.
+    var bucket = leerAsistenciaBucket(g.id, pasarFecha);
     if(pasarIndex === null){
       var idx = g.estudiantes.findIndex(function(e){ return !bucket[e.id]; });
       pasarIndex = idx === -1 ? g.estudiantes.length : idx;
@@ -1006,7 +1036,8 @@
       }
 
       var limiteAsistencia = limiteColumnaAsistencias(ws, headerRow, nameCol, maxCol);
-      var fechasEstado = Object.keys(state.asistencias[grupo.id] || {}).sort();
+      // Solo se agregan columnas para fechas que tengan al menos una marca.
+      var fechasEstado = fechasDelGrupo(grupo.id);
       var ultimaColumnaFecha = Object.keys(fechas).reduce(function(maximo, col){ return Math.max(maximo, Number(col)); }, nameCol + 2);
       var fechasOmitidas = [];
       fechasEstado.forEach(function(iso){
@@ -1037,7 +1068,7 @@
         var totalP = 0;
         Object.keys(fechas).forEach(function(colText){
           var col = Number(colText), fechaIso = fechas[col];
-          var estado = (state.asistencias[grupo.id][fechaIso] || {})[est.id] || "";
+          var estado = leerAsistenciaBucket(grupo.id, fechaIso)[est.id] || "";
           var justificada = estado === "A" && esJustificada(grupo.id, fechaIso, est.id);
           var cell = ws.getRow(rowNumber).getCell(col);
           cell.value = justificada ? ESTADO_VALOR_EXPORT.P : (estado ? ESTADO_VALOR_EXPORT[estado] : null);
@@ -1077,34 +1108,111 @@
     showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional descargado con el formato original.");
   }
 
+  // ---------------------------------------------------------
+  // GOOGLE IDENTITY SERVICES: carga dinámica con reintentos.
+  // ---------------------------------------------------------
+  // index.html YA NO incluye <script src="https://accounts.google.com/gsi/client">
+  // de forma estática (un solo fallo de red en ese punto dejaba "window.google"
+  // indefinido para siempre, y todos los botones de Drive mostraban "revisa tu
+  // conexión" aunque el usuario sí tuviera internet). En su lugar, esta función
+  // inyecta el <script> por código, y si falla (red lenta, DNS, corte momentáneo)
+  // reintenta varias veces con espera creciente antes de rendirse.
+  var GOOGLE_GSI_SRC = "https://accounts.google.com/gsi/client";
+  var googleIdentityPromise = null; // evita cargas duplicadas si hay varios clics
+
+  // Revisa si la librería de Google ya quedó disponible en window.
+  function gsiListo(){
+    return !!(window.google && google.accounts && google.accounts.oauth2);
+  }
+
+  // Pequeña ayuda para esperar N milisegundos dentro de una función async.
+  function esperar(ms){
+    return new Promise(function(resolve){ setTimeout(resolve, ms); });
+  }
+
+  // Inyecta el <script> de Google Identity Services una vez y resuelve/rechaza
+  // según si terminó de cargar (onload) o falló la petición de red (onerror).
+  function cargarScriptGoogle(){
+    return new Promise(function(resolve, reject){
+      if(gsiListo()){ resolve(); return; }
+      // Si quedó un <script> de un intento fallido anterior, lo quitamos para
+      // forzar una petición de red nueva en vez de que el navegador reutilice
+      // una respuesta de error en caché.
+      document.querySelectorAll('script[data-gsi="1"]').forEach(function(s){ s.remove(); });
+      var script = document.createElement("script");
+      script.src = GOOGLE_GSI_SRC + "?_=" + Date.now(); // cache-bust por intento
+      script.async = true;
+      script.defer = true;
+      script.dataset.gsi = "1";
+      script.onload = function(){
+        if(gsiListo()) resolve();
+        else reject(new Error("Google respondió pero no expuso accounts.oauth2"));
+      };
+      script.onerror = function(){ reject(new Error("Fallo de red cargando el script de Google")); };
+      document.head.appendChild(script);
+    });
+  }
+
+  // Punto de entrada público: asegura que Google Identity Services esté listo,
+  // reintentando hasta "intentos" veces con espera creciente (800ms, 1600ms...)
+  // antes de rendirse. Si ya hay una carga en curso, todos los llamadores
+  // comparten la misma promesa en vez de disparar peticiones duplicadas.
+  function asegurarGoogleIdentity(intentos){
+    if(gsiListo()) return Promise.resolve();
+    if(googleIdentityPromise) return googleIdentityPromise;
+    intentos = intentos || 3;
+    googleIdentityPromise = (async function(){
+      var ultimoError = null;
+      for(var intento=1; intento<=intentos; intento++){
+        try{
+          await cargarScriptGoogle();
+          return;
+        }catch(err){
+          ultimoError = err;
+          if(intento < intentos) await esperar(800 * intento);
+        }
+      }
+      // Se agotaron los intentos: se limpia la promesa para permitir un
+      // reintento fresco la próxima vez que el usuario haga clic.
+      googleIdentityPromise = null;
+      throw ultimoError;
+    })();
+    return googleIdentityPromise;
+  }
+
+  // Inicia el flujo de OAuth de Google Drive. Antes de pedir el token, se
+  // asegura (con reintentos) de que la librería de Google esté cargada; así
+  // un corte de red momentáneo ya no deja el botón inutilizado para siempre.
   function iniciarGoogleDrive(action){
     if(location.protocol === "file:" && !window.Capacitor){
       showToast("Abre FullStatus desde http://localhost para iniciar sesión con Google.");
       return;
     }
-    if(!window.google || !google.accounts || !google.accounts.oauth2){
-      showToast("No se pudo cargar el acceso de Google. Revisa tu conexión.");
-      return;
-    }
     drivePendingAction = action;
-    if(!driveTokenClient){
-      driveTokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
-        callback: function(response){
-          if(response.error){
-            console.error("Error de autorización de Google", response);
-            showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
-            return;
+    asegurarGoogleIdentity().then(function(){
+      if(!driveTokenClient){
+        driveTokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+          callback: function(response){
+            if(response.error){
+              console.error("Error de autorización de Google", response);
+              showToast("Google bloqueó la autorización. Registra "+location.origin+" en Google Cloud Console.");
+              return;
+            }
+            localStorage.setItem(GOOGLE_AUTH_KEY, "1");
+            var pending = drivePendingAction;
+            drivePendingAction = null;
+            if(pending) pending(response.access_token);
           }
-          localStorage.setItem(GOOGLE_AUTH_KEY, "1");
-          var pending = drivePendingAction;
-          drivePendingAction = null;
-          if(pending) pending(response.access_token);
-        }
-      });
-    }
-    driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
+        });
+      }
+      driveTokenClient.requestAccessToken({prompt: localStorage.getItem(GOOGLE_AUTH_KEY) ? "" : "consent"});
+    }).catch(function(err){
+      // Solo llegamos aquí si TODOS los reintentos de red fallaron.
+      console.error("No se pudo cargar Google Identity Services tras varios intentos", err);
+      showToast("No se pudo conectar con los servicios de Google. Revisa tu conexión a internet e inténtalo de nuevo.");
+    });
   }
 
   function columnaA1(numero){
@@ -1451,7 +1559,9 @@
     });
 
     var sel = document.getElementById("selGrupoActivo");
-    if(sel) sel.addEventListener("change", function(){ state.grupoActivoId = sel.value; pasarIndex = null; saveState(); render(); });
+    // Cambiar de grupo es solo navegación: se guarda la selección pero NO se marca
+    // "cambios pendientes" (no hay nada nuevo que subir a Drive).
+    if(sel) sel.addEventListener("change", function(){ state.grupoActivoId = sel.value; pasarIndex = null; saveState(false); render(); });
 
     var btnEliminarGrupo = document.getElementById("btnEliminarGrupo");
     if(btnEliminarGrupo) btnEliminarGrupo.addEventListener("click", function(){
@@ -1523,7 +1633,7 @@
       pasarViewMode = "card";
       pasarSegundaLista = null;
       pasarSegundaIndex = null;
-      saveState();
+      saveState(false); // solo navegación, no es un cambio de asistencia
       render();
     });
     var inputFecha = document.getElementById("inputFechaLista");
@@ -1531,7 +1641,7 @@
       var fecha = inputFecha.value;
       if(!fecha){ render(); return; }
       var g = grupoActivo();
-      var yaExiste = g && state.asistencias[g.id] && state.asistencias[g.id][fecha];
+      var yaExiste = g && fechaTieneMarcas(g.id, fecha);
       if(!yaExiste && g){
         var confirmado = confirm('¿Agregar el '+displayFecha(fecha)+' como una nueva fecha de asistencia para "'+g.nombre+'"?');
         if(!confirmado){ render(); return; }
@@ -1572,7 +1682,7 @@
     var btnSegundoPase = document.getElementById("btnSegundoPase");
     if(btnSegundoPase) btnSegundoPase.addEventListener("click", function(){
       var g = grupoActivo();
-      var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
+      var bucket = leerAsistenciaBucket(g.id, pasarFecha);
       pasarSegundaLista = g.estudiantes.filter(function(e){ return bucket[e.id] === "A"; }).map(function(e){ return e.id; });
       pasarSegundaIndex = 0;
       pasarViewMode = "segunda";
@@ -1616,6 +1726,8 @@
         var bucket = ensureAsistenciaBucket(g.id, pasarFecha);
         var estId = chip.getAttribute("data-estudiante"), estado = chip.getAttribute("data-estado");
         if(bucket[estId] === estado) delete bucket[estId]; else bucket[estId] = estado;
+        // Si ya no queda ninguna marca, la fecha deja de existir (no queda columna vacía).
+        if(Object.keys(bucket).length === 0) delete state.asistencias[g.id][pasarFecha];
         saveState(); render();
       });
     });
@@ -1625,7 +1737,7 @@
     if(selGrupoHistorial) selGrupoHistorial.addEventListener("change", function(){
       state.grupoActivoId = selGrupoHistorial.value;
       pasarIndex = null;
-      saveState();
+      saveState(false); // solo navegación, no es un cambio de asistencia
       render();
     });
     var hd = document.getElementById("histDesde");
@@ -1641,7 +1753,7 @@
       var fechaNueva = document.getElementById("inputFechaEditarNueva").value;
       if(!fechaNueva){ showToast("Elige la nueva fecha en el calendario."); return; }
       if(fechaNueva === fechaVieja){ showToast("Es la misma fecha."); return; }
-      if(state.asistencias[g.id][fechaNueva] && Object.keys(state.asistencias[g.id][fechaNueva]).length){
+      if(fechaTieneMarcas(g.id, fechaNueva)){
         showToast("Ya existe el "+displayFecha(fechaNueva)+" con datos. Elimínalo primero si quieres reemplazarlo.");
         return;
       }
@@ -1736,6 +1848,11 @@
   });
   if(!state.grupoActivoId && state.grupos.length) state.grupoActivoId = state.grupos[0].id;
   updateConn();
+  // Dispara la carga de Google Identity Services desde el arranque (no bloqueante):
+  // así, para cuando el usuario llegue a pulsar "Cargar desde Drive", la librería
+  // ya suele estar lista. Si falla aquí, se reintentará automáticamente en el
+  // primer clic (asegurarGoogleIdentity reutiliza/relanza la carga).
+  asegurarGoogleIdentity().catch(function(){ /* se reintentará al primer clic */ });
   restaurarCacheLocal().then(function(){
     setTab("pasar");
     sincronizarPendientes();

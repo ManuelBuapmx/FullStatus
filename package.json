@@ -7,6 +7,8 @@
     "start:web": "node server.cjs",
     "start:windows": "electron .",
     "dist:windows": "electron-builder --win nsis --x64",
+    "sync:www": "node sync-www.cjs",
+    "sync:android": "node sync-www.cjs && cap sync android",
     "test": "echo \"No tests configured\""
   },
   "keywords": [],
@@ -37,17 +39,13 @@
       "FS.png",
       "Logo Cuadrado.jfif",
       "package.json",
-      "vendor/**/*",
-      "www/**/*"
+      "vendor/**/*"
     ],
     "win": {
       "target": [
-        "portable"
+        "nsis"
       ],
       "icon": "FS.png"
-    },
-    "portable": {
-      "artifactName": "FullStatus-portable.exe"
     },
     "nsis": {
       "oneClick": false,

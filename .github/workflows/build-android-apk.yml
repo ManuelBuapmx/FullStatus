@@ -34,7 +34,7 @@ jobs:
         run: npx cap add android
 
       - name: Sync Capacitor Android project
-        run: npx cap sync android
+        run: npm run sync:android
 
       - name: Build debug APK
         working-directory: android

@@ -12,6 +12,14 @@
 </head>
 <body>
 
+<script>
+  // Marca la app como "corriendo dentro de Electron" para que styles.css
+  // pueda ajustar el encabezado (zona arrastrable, botones de la ventana, etc.)
+  if (navigator.userAgent.includes("Electron")) {
+    document.documentElement.classList.add("is-electron");
+  }
+</script>
+
 <div class="launch-screen" aria-hidden="true">
   <img src="FullStatus.png" alt="FullStatus">
 </div>
@@ -44,8 +52,27 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
-<script src="https://accounts.google.com/gsi/client"></script>
+<!-- ExcelJS se sirve localmente (vendor/), así que no depende de la red. -->
+<script src="vendor/exceljs.min.js"></script>
+
+<!-- CORREGIDO: Google Identity Services (GIS) SÍ se vuelve a cargar aquí de
+     forma estática, con "defer" para no bloquear el renderizado inicial.
+     Antes se había quitado este <script> para que un solo fallo de red no
+     dejara "window.google" indefinido para siempre; pero app.js nunca llegó
+     a implementar la carga dinámica de reemplazo prometida en el comentario
+     anterior, así que el resultado real era que Google NUNCA se cargaba y el
+     botón de Drive fallaba siempre, con o sin conexión.
+
+     Ahora app.js SÍ implementa esa carga dinámica con reintentos
+     (ver la función asegurarGoogleIdentity en app.js): si este <script>
+     estático llega a fallar por cualquier motivo (bloqueador, red lenta al
+     arrancar, etc.), asegurarGoogleIdentity detecta que "window.google"
+     sigue sin existir e inyecta el mismo script de nuevo por código,
+     reintentando varias veces con espera creciente antes de avisarle al
+     usuario que no hay conexión. Así queda cubierto tanto el caso normal
+     (este <script> carga bien) como cualquier falla de red puntual. -->
+<script src="https://accounts.google.com/gsi/client" defer></script>
+
 <script src="app.js"></script>
 </body>
 </html>
