@@ -126,7 +126,7 @@
   var pasarSegundaIndex = null;
   var histDesde = "";
   var histHasta = "";
-  var plantillaExcel = null;
+  var histUnidad = "";  var plantillaExcel = null;
   var GOOGLE_CLIENT_ID = "814235047466-9bp0f3j15l5eikmpjasgigol9gnvdelv.apps.googleusercontent.com";
   var GOOGLE_SHEET_ID = "1MyLylWU_26VzjMI8t3JZzDiDkcvsiYTi";
   var DRIVE_FILE_KEY = "listaAsistenciaDriveFileId_v1";
@@ -165,6 +165,40 @@
     }).sort();
   }
   function faltasEquivalentes(faltas, retardos){ return faltas + Math.floor(retardos / 3); }
+
+  // Unidades/periodos: solo viven en la app (no se escriben en el Excel institucional).
+  function unidadesDelGrupo(g){
+    return (Array.isArray(g.unidades) ? g.unidades.slice() : []).sort(function(a, b){ return a.desde < b.desde ? -1 : (a.desde > b.desde ? 1 : 0); });
+  }
+  function unidadDeFecha(g, fecha){
+    return unidadesDelGrupo(g).find(function(u){ return fecha >= u.desde && fecha <= u.hasta; }) || null;
+  }
+  function fechasFiltradas(g, todasFechas){
+    var unidad = histUnidad ? unidadesDelGrupo(g).find(function(u){ return u.id === histUnidad; }) : null;
+    return todasFechas.filter(function(f){
+      if(unidad && (f < unidad.desde || f > unidad.hasta)) return false;
+      if(histDesde && f < histDesde) return false;
+      if(histHasta && f > histHasta) return false;
+      return true;
+    });
+  }
+  // prompt() no existe en Electron, por eso se usa un cuadro propio.
+  function pedirTexto(mensaje, alAceptar){
+    var fondo = document.createElement("div");
+    fondo.className = "modal-fondo";
+    fondo.innerHTML = '<div class="modal-caja" role="dialog" aria-modal="true"><p>'+esc(mensaje)+'</p><input type="text" id="modalTexto" maxlength="200"><div class="row" style="justify-content:flex-end;margin-top:14px;"><button class="btn secondary" id="modalCancelar">Cancelar</button><button class="btn" id="modalAceptar">Aceptar</button></div></div>';
+    document.body.appendChild(fondo);
+    var input = fondo.querySelector("#modalTexto");
+    function cerrar(){ document.body.removeChild(fondo); }
+    function aceptar(){ var valor = input.value; cerrar(); alAceptar(valor); }
+    fondo.querySelector("#modalAceptar").addEventListener("click", aceptar);
+    fondo.querySelector("#modalCancelar").addEventListener("click", cerrar);
+    input.addEventListener("keydown", function(ev){
+      if(ev.key === "Enter") aceptar();
+      else if(ev.key === "Escape") cerrar();
+    });
+    input.focus();
+  }
 
   function ensureJustificantesBucket(grupoId, fecha){
     if(!state.justificantes[grupoId]) state.justificantes[grupoId] = {};
@@ -594,11 +628,8 @@
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
 
     var todasFechas = fechasDelGrupo(g.id);
-    var fechas = todasFechas.filter(function(f){
-      if(histDesde && f < histDesde) return false;
-      if(histHasta && f > histHasta) return false;
-      return true;
-    });
+    var fechas = fechasFiltradas(g, todasFechas);
+    var unidades = unidadesDelGrupo(g);
     var resumen = {P:0, A:0, R:0, J:0};
     fechas.forEach(function(fecha){
       Object.keys(state.asistencias[g.id][fecha] || {}).forEach(function(estudianteId){
@@ -627,6 +658,13 @@
     html += '<div class="summary-J"><strong>'+resumen.J+'</strong><span> justificadas</span></div>';
     html += '</div>';
     html += '<div class="hist-toolbar">';
+    if(unidades.length){
+      html += '<div class="field" style="margin-bottom:0;"><label for="selUnidadHistorial">Unidad</label><select id="selUnidadHistorial"><option value="">Todas las unidades</option>';
+      unidades.forEach(function(u){
+        html += '<option value="'+esc(u.id)+'" '+(u.id===histUnidad?"selected":"")+'>'+esc(u.nombre)+' ('+displayFecha(u.desde)+' - '+displayFecha(u.hasta)+')</option>';
+      });
+      html += '</select></div>';
+    }
     html += '<div class="field" style="margin-bottom:0;"><label for="histDesde">Desde</label><input type="date" id="histDesde" value="'+histDesde+'"></div>';
     html += '<div class="field" style="margin-bottom:0;"><label for="histHasta">Hasta</label><input type="date" id="histHasta" value="'+histHasta+'"></div>';
     html += '<button class="btn secondary" id="btnLimpiarFiltro">Quitar filtro</button>';
@@ -636,22 +674,35 @@
 
     if(fechas.length === 0 || g.estudiantes.length === 0){
       html += '<p class="empty">Todavía no hay registros de asistencia'+(fechas.length===0?" en este rango de fechas":"")+'.</p></div>';
+      html += renderUnidades(g, todasFechas);
       html += renderEditorFechas(g, todasFechas);
       html += renderJustificantes(g);
       return html;
     }
 
     html += '<div class="table-scroll"><table class="matriz"><thead><tr><th>Estudiante</th>';
-    fechas.forEach(function(f){ html += "<th>"+displayFecha(f)+"</th>"; });
+    var unidadPrevia = null;
+    fechas.forEach(function(f, i){
+      var u = unidadDeFecha(g, f);
+      var uid_ = u ? u.id : "";
+      var inicio = unidades.length && i > 0 && uid_ !== unidadPrevia;
+      unidadPrevia = uid_;
+      html += '<th'+(inicio?' class="unidad-inicio"':'')+'>'+displayFecha(f)+(unidades.length?'<small class="unidad-etiqueta">'+(u?esc(u.nombre):"Sin unidad")+'</small>':'')+"</th>";
+    });
     html += "<th>Total presente</th></tr></thead><tbody>";
     g.estudiantes.forEach(function(e){
       html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+"</td>";
       var totalP = 0;
-      fechas.forEach(function(f){
+      var unidadPreviaFila = null;
+      fechas.forEach(function(f, i){
         var v = (state.asistencias[g.id][f] || {})[e.id] || "";
         var justificada = v === "A" && esJustificada(g.id, f, e.id);
         if(v==="P" || justificada) totalP++;
-        var clase = justificada ? "mark-J" : (v?"mark-"+v:"mark-empty");
+        var uf = unidadDeFecha(g, f);
+        var ufId = uf ? uf.id : "";
+        var inicioCelda = unidades.length && i > 0 && ufId !== unidadPreviaFila;
+        unidadPreviaFila = ufId;
+        var clase = (justificada ? "mark-J" : (v?"mark-"+v:"mark-empty")) + (inicioCelda ? " unidad-inicio" : "");
         var texto = justificada ? "J" : (v?ESTADO_VALOR_EXPORT[v]:"–");
         var atributos = (v==="A") ? ' data-justificar data-estudiante="'+esc(e.id)+'" data-fecha="'+esc(f)+'" title="Tocar para '+(justificada?"quitar el justificante":"marcar como justificada")+'"' : '';
         html += '<td class="'+clase+'"'+atributos+'>'+texto+"</td>";
@@ -667,8 +718,33 @@
     html += "</div>";
     html += '<p class="helptext">La primera vez se guarda el archivo institucional en Drive. Después, "Actualizar en Google Drive" modifica ese mismo archivo.</p>';
     html += "</div>";
+    html += renderUnidades(g, todasFechas);
     html += renderEditorFechas(g, todasFechas);
     html += renderJustificantes(g);
+    return html;
+  }
+
+  function renderUnidades(g, todasFechas){
+    var unidades = unidadesDelGrupo(g);
+    var html = '<div class="card">';
+    html += "<h2>Unidades y periodos</h2>";
+    html += '<p class="helptext" style="margin-top:0;">Define las unidades de la materia con su rango de fechas. Cada fecha registrada se asigna a la unidad cuyo rango la contiene, y puedes filtrar el historial por unidad. Las unidades solo se guardan en la app; no cambian el Excel institucional.</p>';
+    if(unidades.length === 0){
+      html += '<p class="empty">Este grupo todavía no tiene unidades.</p>';
+    } else {
+      html += '<ul class="estudiantes">';
+      unidades.forEach(function(u){
+        var cuantas = todasFechas.filter(function(f){ return f >= u.desde && f <= u.hasta; }).length;
+        html += '<li><span><b>'+esc(u.nombre)+'</b> — '+displayFecha(u.desde)+' al '+displayFecha(u.hasta)+' <span class="helptext">('+cuantas+' '+(cuantas===1?"día":"días")+')</span></span><button class="btn danger" data-quitar-unidad="'+esc(u.id)+'">Quitar</button></li>';
+      });
+      html += "</ul>";
+    }
+    html += '<div class="row" style="margin-top:14px;align-items:flex-end;">';
+    html += '<div class="field" style="flex:2;min-width:160px;margin-bottom:0;"><label for="unidadNombre">Nombre</label><input type="text" id="unidadNombre" placeholder="Unidad '+(unidades.length+1)+'" maxlength="60"></div>';
+    html += '<div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label for="unidadDesde">Desde</label><input type="date" id="unidadDesde"></div>';
+    html += '<div class="field" style="flex:1;min-width:150px;margin-bottom:0;"><label for="unidadHasta">Hasta</label><input type="date" id="unidadHasta"></div>';
+    html += '<button class="btn" id="btnAgregarUnidad">Agregar unidad</button>';
+    html += "</div></div>";
     return html;
   }
 
@@ -722,11 +798,7 @@
 
   function construirMatrizActiva(){
     var g = grupoActivo();
-    var fechas = fechasDelGrupo(g.id).filter(function(f){
-      if(histDesde && f < histDesde) return false;
-      if(histHasta && f > histHasta) return false;
-      return true;
-    });
+    var fechas = fechasFiltradas(g, fechasDelGrupo(g.id));
     var header = ["Estudiante"].concat(fechas.map(displayFecha)).concat(["Total presente"]);
     var rows = [header];
     g.estudiantes.forEach(function(e){
@@ -1737,15 +1809,46 @@
     if(selGrupoHistorial) selGrupoHistorial.addEventListener("change", function(){
       state.grupoActivoId = selGrupoHistorial.value;
       pasarIndex = null;
+      histUnidad = "";
       saveState(false); // solo navegación, no es un cambio de asistencia
       render();
+    });
+    var selUnidadHistorial = document.getElementById("selUnidadHistorial");
+    if(selUnidadHistorial) selUnidadHistorial.addEventListener("change", function(){ histUnidad = selUnidadHistorial.value; render(); });
+    var btnAgregarUnidad = document.getElementById("btnAgregarUnidad");
+    if(btnAgregarUnidad) btnAgregarUnidad.addEventListener("click", function(){
+      var g = grupoActivo();
+      var desde = document.getElementById("unidadDesde").value;
+      var hasta = document.getElementById("unidadHasta").value;
+      var nombre = document.getElementById("unidadNombre").value.trim() || "Unidad "+(unidadesDelGrupo(g).length+1);
+      if(!desde || !hasta){ showToast("Elige las fechas de inicio y fin de la unidad."); return; }
+      if(hasta < desde){ showToast("La fecha final no puede ser anterior a la inicial."); return; }
+      var empalmada = unidadesDelGrupo(g).find(function(u){ return desde <= u.hasta && hasta >= u.desde; });
+      if(empalmada){ showToast("Se empalma con "+empalmada.nombre+" ("+displayFecha(empalmada.desde)+" - "+displayFecha(empalmada.hasta)+")."); return; }
+      if(!Array.isArray(g.unidades)) g.unidades = [];
+      g.unidades.push({id: uid(), nombre: nombre, desde: desde, hasta: hasta});
+      saveState(false); // las unidades no afectan al Excel
+      render();
+      showToast("Unidad agregada.");
+    });
+    document.querySelectorAll("[data-quitar-unidad]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var id = btn.getAttribute("data-quitar-unidad");
+        if(!confirm("¿Quitar esta unidad? Las fechas registradas no se borran.")) return;
+        g.unidades = (g.unidades || []).filter(function(u){ return u.id !== id; });
+        if(histUnidad === id) histUnidad = "";
+        saveState(false);
+        render();
+        showToast("Unidad quitada.");
+      });
     });
     var hd = document.getElementById("histDesde");
     if(hd) hd.addEventListener("change", function(){ histDesde = hd.value; render(); });
     var hh = document.getElementById("histHasta");
     if(hh) hh.addEventListener("change", function(){ histHasta = hh.value; render(); });
     var btnLimpiarFiltro = document.getElementById("btnLimpiarFiltro");
-    if(btnLimpiarFiltro) btnLimpiarFiltro.addEventListener("click", function(){ histDesde=""; histHasta=""; render(); });
+    if(btnLimpiarFiltro) btnLimpiarFiltro.addEventListener("click", function(){ histDesde=""; histHasta=""; histUnidad=""; render(); });
     var btnCambiarFecha = document.getElementById("btnCambiarFecha");
     if(btnCambiarFecha) btnCambiarFecha.addEventListener("click", function(){
       var g = grupoActivo();
@@ -1794,12 +1897,13 @@
           return;
         }
         if(!confirm('¿Marcar la falta de '+nombre+' del '+displayFecha(fecha)+' como justificada? Contará como asistencia.')) return;
-        var nota = prompt("Motivo del justificante (opcional):", "") || "";
-        var bucket = ensureJustificantesBucket(g.id, fecha);
-        bucket[estId] = {nota: nota.trim()};
-        saveState(); render();
-        showToast("Falta marcada como justificada.");
-        autoSincronizarCambios();
+        pedirTexto("Motivo del justificante (opcional):", function(nota){
+          var bucket = ensureJustificantesBucket(g.id, fecha);
+          bucket[estId] = {nota: nota.trim()};
+          saveState(); render();
+          showToast("Falta marcada como justificada.");
+          autoSincronizarCambios();
+        });
       });
     });
     document.querySelectorAll("[data-quitar-justificante]").forEach(function(btn){

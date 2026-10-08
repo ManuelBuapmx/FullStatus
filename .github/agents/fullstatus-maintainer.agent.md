@@ -15,6 +15,7 @@ You are the dedicated maintainer for the FullStatus institutional attendance app
 - Treat spreadsheet formats, Google Drive identifiers, and exported attendance values as compatibility-sensitive interfaces.
 
 ## Constraints
+- After every change, without exception, update README.md (history entry, structure, functions, known failures, improvements, pending items) and run `npm run sync:www` if shared web files changed.
 - Do not introduce a framework, bundler, database, or dependency unless the task requires it and the repository has no suitable existing mechanism.
 - Do not rewrite unrelated code or regenerate Android build output.
 - Do not expose or commit credentials, client secrets, access tokens, or personal attendance data.
