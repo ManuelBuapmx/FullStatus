@@ -8,8 +8,7 @@
     "start:windows": "electron .",
     "dist:windows": "electron-builder --win nsis --x64",
     "sync:www": "node sync-www.cjs",
-    "sync:android": "node sync-www.cjs && cap sync android",
-    "test": "echo \"No tests configured\""
+    "sync:android": "node sync-www.cjs && cap sync android"
   },
   "keywords": [],
   "author": "",
@@ -17,11 +16,11 @@
   "type": "commonjs",
   "dependencies": {
     "@capacitor/android": "^8.5.1",
-    "@capacitor/cli": "^8.5.1",
     "@capacitor/core": "^8.5.1"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.1",
     "electron": "^37.0.0",
     "electron-builder": "^26.15.3"
   },
@@ -37,7 +36,6 @@
       "server.cjs",
       "FullStatus.png",
       "FS.png",
-      "Logo Cuadrado.jfif",
       "package.json",
       "vendor/**/*"
     ],
