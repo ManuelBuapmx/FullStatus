@@ -228,7 +228,7 @@
     function cancelar(){ cerrar(); if(alCancelar) alCancelar(); }
     function teclas(ev){
       if(ev.key === "Escape") cancelar();
-      else if(ev.key === "Enter" && !(document.activeElement && document.activeElement.id === "modalCancelar")) aceptar();
+      else if(ev.key === "Enter" && !(document.activeElement && document.activeElement.id === "modalCancelar")){ ev.preventDefault(); aceptar(); }
     }
     fondo.querySelector("#modalAceptar").addEventListener("click", aceptar);
     fondo.querySelector("#modalCancelar").addEventListener("click", cancelar);
@@ -447,56 +447,6 @@
     var profesor = buscarValorEtiqueta(ws, "PROFESOR", headerRow, MAX_COL);
 
     return { nombre: ws.name, estudiantes: estudiantes, asistencias: asistenciasPorFecha, materia: materia, profesor: profesor };
-  }
-
-  function importarArchivoExcel(file){
-    var estadoEl = document.getElementById("importarEstado");
-    if(estadoEl) estadoEl.textContent = "Leyendo archivo…";
-    var reader = new FileReader();
-    reader.onload = function(ev){
-      (async function(){
-        try{
-          var wb = new ExcelJS.Workbook();
-          await wb.xlsx.load(ev.target.result);
-          plantillaExcel = wb;
-          var importados = 0, estudiantesTotal = 0, omitidos = [];
-          for(var i=0; i<wb.worksheets.length; i++){
-            var ws = wb.worksheets[i];
-            if(esHojaPlantilla(ws.name)) continue;
-            var datos = extraerGrupoDeHoja(ws);
-            if(!datos){ omitidos.push(ws.name); continue; }
-            var existente = state.grupos.find(function(g){ return g.nombre.trim().toLowerCase() === datos.nombre.trim().toLowerCase(); });
-            if(existente){
-              var reemplazar = confirm('Ya existe un grupo llamado "'+datos.nombre+'". ¿Reemplazar sus datos con lo que viene del archivo?\n\nCancelar para omitir esta hoja.');
-              if(!reemplazar){ omitidos.push(ws.name); continue; }
-              delete state.asistencias[existente.id];
-              state.grupos = state.grupos.filter(function(g){ return g.id !== existente.id; });
-            }
-            var nuevoId = uid();
-            state.grupos.push({ id: nuevoId, nombre: datos.nombre, estudiantes: datos.estudiantes, materia: datos.materia, profesor: datos.profesor });
-            state.asistencias[nuevoId] = datos.asistencias;
-            importados++;
-            estudiantesTotal += datos.estudiantes.length;
-            if(!state.grupoActivoId) state.grupoActivoId = nuevoId;
-          }
-          saveState();
-          render();
-          if(importados > 0){
-            showToast("Importado" + (importados>1?"s ":" ") + importados + " grupo(s) con " + estudiantesTotal + " estudiante(s) en total.");
-          }
-          if(omitidos.length){
-            showToast("No se pudo leer: " + omitidos.join(", "));
-          }
-          if(estadoEl) estadoEl.textContent = "";
-        }catch(err){
-          console.error(err);
-          if(estadoEl) estadoEl.textContent = "";
-          showToast("No se pudo leer el archivo. ¿Es un .xlsx válido?");
-        }
-      })();
-    };
-    reader.onerror = function(){ showToast("No se pudo leer el archivo."); };
-    reader.readAsArrayBuffer(file);
   }
 
   // =========================================================
