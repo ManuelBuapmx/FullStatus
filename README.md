@@ -43,6 +43,8 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 | `localStorage` `listaAsistenciaCambiosPendientes_v1` | `"1"` si hay cambios sin subir a Drive |
 | `localStorage` `listaAsistenciaDriveFileId_v1` | Id del archivo de Drive usado |
 | `localStorage` `listaAsistenciaGoogleDriveAuth_v3` | Marca de que ya se concedió permiso (evita pedir consentimiento otra vez) |
+| `localStorage` `fullstatusEscuelas_v1` | Lista de escuelas `[{id, nombre, driveFileId, original?}]`. La escuela `original` usa las claves de siempre; las demás agregan el sufijo `__<id>` a `listaAsistenciaData_v2`, `listaAsistenciaCambiosPendientes_v1`, `listaAsistenciaDriveFileId_v1` y a la clave `institucional` de IndexedDB |
+| `sessionStorage` `fullstatusEscuelaSesion_v1` | Id de la escuela elegida en esta sesión (si no existe, se muestra la pantalla de inicio) |
 | IndexedDB `integratorium_cache_v1` | Copia local del Excel institucional (`plantillaExcel`) para trabajar sin conexión; se restaura al iniciar con `restaurarCacheLocal` |
 
 Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor, unidades?: [{id, nombre, desde, hasta}] }`; `asistencias[grupoId][fechaISO][estudianteId]` con estados `P` (asistencia, exporta `1`), `A` (falta, `0`) y `R` (retardo, `2`); `justificantes[grupoId][fechaISO][estudianteId] = { nota }`. Una fecha existe solo si tiene al menos una marca (`purgarFechasVacias` limpia las vacías al cargar), salvo las importadas del Excel sin marcas (`fechasVacias`). **No cambiar estas claves ni el formato sin plan de migración.**
@@ -55,7 +57,7 @@ Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor
 - Grupos nuevos: se clonan de la hoja "Plantilla" (`clonarHojaDesdePlantilla`); si no existe esa pestaña la creación falla con aviso.
 - Auto-sincronización: `autoSincronizarCambios` / `sincronizarPendientes` suben cuando hay internet y cambios pendientes.
 - Al sincronizar un grupo, `crearBufferPlantillaInstitucional` escribe los alumnos en orden alfabético desde la primera fila y **limpia las filas sobrantes** (hasta `headerRow + 32`) para que un alumno quitado no deje datos duplicados.
-- Funciones clave en `app.js`: `extraerGrupoDeHoja`, `encontrarEncabezadoAlumno`, `limiteColumnaAsistencias`, `eliminarFechaDeHoja`, `renombrarFechaEnHoja`, `compactarColumnasVacias`, `construirMatrizActiva`, `descargarXlsxCompleto`, `faltasEquivalentes` (3 retardos = 1 falta), `confirmar`, `pedirTexto`.
+- Funciones clave en `app.js`: `extraerGrupoDeHoja`, `encontrarEncabezadoAlumno`, `limiteColumnaAsistencias`, `eliminarFechaDeHoja`, `renombrarFechaEnHoja`, `compactarColumnasVacias`, `construirMatrizActiva`, `descargarXlsxCompleto`, `faltasEquivalentes` (3 retardos = 1 falta), `confirmar`, `pedirTexto`; escuelas: `cargarEscuelas`, `sufijoEscuela`, `mostrarSelectorEscuelas`; resultados: `resEsDeEscuela`.
 
 ## Estructura
 
@@ -89,6 +91,25 @@ npm run dist:windows     # instalador de Windows (electron-builder)
 Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
 
 ## Historial de cambios
+
+_Horas en horario de Ciudad de México. Las de las entradas del 2026-10-10 posteriores a las 00:44 son aproximadas (tomadas del reloj de las capturas de pantalla de la sesión)._
+
+### 2026-10-10 01:55 a. m. — Filtro "Tipo de examen" por escuela
+
+- **Ahora:** en Resultados, el selector "Tipo de examen" solo lista los exámenes (`materias`) que tienen al menos un resultado en los grupos de la escuela seleccionada. Antes listaba todos los de Supabase. Misma limitación que el filtro por escuela: depende de que `grupo` coincida con el nombre de un grupo de la app.
+
+### 2026-10-10 01:52 a. m. — Resultados filtrados por escuela
+
+- **Nuevo:** la pestaña Resultados solo muestra los resultados cuyo `grupo` coincide con el nombre de algún grupo de la escuela seleccionada (`resEsDeEscuela`, comparación sin mayúsculas ni espacios extra). El selector de grupo de esa pestaña solo lista grupos de la escuela, y se indica cuántos resultados de otros grupos quedan ocultos.
+- **Limitación:** la tabla `resultados` de Supabase no tiene un campo de escuela; el filtro depende de que el nombre del grupo coincida con el de la app. Si dos escuelas tienen un grupo con el mismo nombre, sus resultados se mezclan. Solución robusta pendiente: agregar una columna `escuela` en Supabase y filtrar por ella.
+- Solo lectura; no cambia datos en Supabase ni claves de almacenamiento.
+
+### 2026-10-10 01:25 a. m. — Pantalla de inicio: elegir escuela
+
+- **Nuevo:** al abrir la app se muestra "¿En qué escuela vas a trabajar?" (`mostrarSelectorEscuelas`). Cada escuela tiene su propio estado, cambios pendientes, copia local del Excel y archivo de Drive. Se puede agregar (nombre + enlace/ID del Excel en Drive), renombrar y quitar escuelas. El botón con el nombre de la escuela en el encabezado vuelve a la pantalla de inicio.
+- **Claves:** lista de escuelas en `localStorage` `fullstatusEscuelas_v1` (`[{id, nombre, driveFileId, original?}]`); escuela elegida en la sesión en `sessionStorage` `fullstatusEscuelaSesion_v1`. La escuela `original` conserva las claves de siempre (`listaAsistenciaData_v2`, `listaAsistenciaCambiosPendientes_v1`, `listaAsistenciaDriveFileId_v1`, IndexedDB clave `institucional`) sin migración; las demás usan esas mismas claves con el sufijo `__<id>`.
+- Cambiar de escuela recarga la ventana (`location.reload()`), así todo el estado en memoria se reinicia limpio. `GOOGLE_SHEET_ID` ahora sale de la escuela elegida.
+- Pendiente de probar: Electron con dos escuelas y dos archivos de Drive distintos. Si cada escuela usa una cuenta de Google diferente, Google puede pedir elegir cuenta al sincronizar.
 
 > Formato: `AAAA-MM-DD hh:mm a. m./p. m. (hora de Ciudad de México)`. Las entradas anteriores al 2026-10-10 12:35 a. m. solo tienen fecha porque no se registró la hora.
 
@@ -191,6 +212,11 @@ Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asis
 
 ## Pendientes conocidos
 
+- Escuelas: falta un botón "Cambiar archivo de Drive" (editar el enlace sin perder grupos; hoy hay que quitar y volver a agregar la escuela, lo que borra sus datos locales) y una protección que impida borrar pestañas cuando el archivo no tiene `Plantilla`.
+- Resultados por escuela: se filtra por nombre de grupo; falta una columna `escuela` en Supabase para no depender de que los nombres coincidan ni de que no se repitan entre escuelas.
+
+- Escuelas: no hay edición del enlace de Drive de una escuela ya creada (hoy: quitar y volver a agregar, o editar `fullstatusEscuelas_v1`). El selector aparece en cada inicio de la app.
+
 - Probar en Electron la limpieza de filas sobrantes al quitar alumnos (2026-10-10 12:35 a. m.): quitar un alumno, sincronizar y revisar el Excel en Drive.
 - Unidades: no hay edición (solo agregar/quitar), ni totales de asistencia por unidad en la tabla, ni se importan/exportan al Excel institucional; tampoco se muestra la unidad en "Pasar lista". Probar en Electron (probado solo con `node --check`).
 - La sincronización solo escribe el grupo activo (decisión deliberada, pero hay que avisar al usuario).
@@ -201,6 +227,8 @@ Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asis
 - Hacer commit de los cambios sin confirmar (`app.js`, `README.md`, `package.json`, archivos eliminados).
 
 ## Fallas y riesgos conocidos
+
+- **Excel de una escuela sin pestaña `Plantilla`:** al sincronizar, la app no puede crear la hoja de un grupo nuevo (avisa) y además elimina del archivo las pestañas de grupos quitados en la app (p. ej. una `Sheet1` vacía cargada como grupo). Si era la única pestaña, el archivo podría quedar sin hojas. Cada escuela debe usar una copia del Excel institucional con su `Plantilla`.
 
 - `npm run dist:windows` se verificó el 2026-10-08 (genera `dist/FullStatus Setup 1.0.0.exe`); tras retirar Android y Capacitor el 2026-10-09 aún no se ha vuelto a compilar.
 - No hay pruebas automatizadas (`npm test` ya no existe).

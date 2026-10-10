@@ -1,7 +1,123 @@
 (function(){
   "use strict";
 
-  var STORAGE_KEY = "listaAsistenciaData_v2";
+  // =========================================================
+  // ESCUELAS (pantalla de inicio)
+  // Cada escuela tiene su propio estado, cambios pendientes, caché del Excel
+  // y archivo de Drive. La escuela "original" conserva las claves de siempre
+  // (sin sufijo) para no perder los datos existentes.
+  // =========================================================
+  var ESCUELAS_KEY = "fullstatusEscuelas_v1";
+  var ESCUELA_SESION_KEY = "fullstatusEscuelaSesion_v1";
+  var SHEET_ID_ESCUELA_ORIGINAL = "1MyLylWU_26VzjMI8t3JZzDiDkcvsiYTi";
+  var CACHE_DB_NOMBRE = "integratorium_cache_v1";
+
+  function guardarEscuelas(lista){ localStorage.setItem(ESCUELAS_KEY, JSON.stringify(lista)); }
+  function cargarEscuelas(){
+    var lista = null;
+    try{ lista = JSON.parse(localStorage.getItem(ESCUELAS_KEY)); }catch(e){}
+    if(!Array.isArray(lista) || !lista.length){
+      lista = [{id:"principal", nombre:"Escuela 1", driveFileId: localStorage.getItem("listaAsistenciaDriveFileId_v1") || SHEET_ID_ESCUELA_ORIGINAL, original:true}];
+      guardarEscuelas(lista);
+    }
+    return lista;
+  }
+  function sufijoEscuela(e){ return e.original ? "" : "__" + e.id; }
+  function extraerIdDrive(texto){
+    var t = String(texto || "").trim();
+    var m = t.match(/\/d\/([A-Za-z0-9_-]{15,})/) || t.match(/[?&]id=([A-Za-z0-9_-]{15,})/);
+    if(m) return m[1];
+    return /^[A-Za-z0-9_-]{15,}$/.test(t) ? t : "";
+  }
+  function borrarCacheEscuela(clave){
+    try{
+      var req = indexedDB.open(CACHE_DB_NOMBRE, 1);
+      req.onupgradeneeded = function(){ req.result.createObjectStore("archivos"); };
+      req.onsuccess = function(){ try{ req.result.transaction("archivos", "readwrite").objectStore("archivos").delete(clave); }catch(e){} };
+    }catch(e){}
+  }
+  function mostrarSelectorEscuelas(){
+    var nav = document.querySelector("nav.tabs"); if(nav) nav.style.display = "none";
+    var conn = document.querySelector(".conn"); if(conn) conn.style.display = "none";
+    var panel = document.getElementById("panelContent");
+    function entrar(id){
+      try{ sessionStorage.setItem(ESCUELA_SESION_KEY, id); }catch(e){}
+      location.reload();
+    }
+    function pintar(){
+      var html = '<div class="card"><div class="eyebrow">Inicio</div><h2>¿En qué escuela vas a trabajar?</h2>';
+      html += '<p class="helptext" style="margin-top:0;">Cada escuela tiene sus propios grupos, asistencias y archivo de Drive.</p>';
+      html += '<ul class="escuelas">';
+      escuelas.forEach(function(e){
+        html += '<li><button class="btn escuela-entrar" data-escuela-entrar="'+esc(e.id)+'">'+esc(e.nombre)+'</button>';
+        html += '<button class="link-sutil" data-escuela-renombrar="'+esc(e.id)+'">Renombrar</button>';
+        html += '<button class="btn danger" data-escuela-quitar="'+esc(e.id)+'"'+(escuelas.length < 2 ? ' disabled' : '')+'>Quitar</button></li>';
+      });
+      html += '</ul></div>';
+      html += '<div class="card"><h2>Agregar otra escuela</h2>';
+      html += '<div class="row" style="align-items:flex-end;">';
+      html += '<div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label for="escuelaNombre">Nombre de la escuela</label><input type="text" id="escuelaNombre" maxlength="60" placeholder="Ej. Escuela 2"></div>';
+      html += '<div class="field" style="flex:2;min-width:240px;margin-bottom:0;"><label for="escuelaDrive">Enlace o ID del Excel en Drive</label><input type="text" id="escuelaDrive" placeholder="https://docs.google.com/spreadsheets/d/..."></div>';
+      html += '<button class="btn" id="btnEscuelaAgregar">Agregar escuela</button></div>';
+      html += '<p class="helptext">Cada escuela usa su propio Excel institucional. Pega el enlace de ese archivo en Drive.</p></div>';
+      panel.innerHTML = html;
+
+      panel.querySelectorAll("[data-escuela-entrar]").forEach(function(b){
+        b.addEventListener("click", function(){ entrar(b.getAttribute("data-escuela-entrar")); });
+      });
+      panel.querySelectorAll("[data-escuela-renombrar]").forEach(function(b){
+        b.addEventListener("click", function(){
+          var e = escuelas.find(function(x){ return x.id === b.getAttribute("data-escuela-renombrar"); });
+          if(!e) return;
+          pedirTexto('Nuevo nombre para "'+e.nombre+'":', function(nombre){
+            nombre = nombre.trim();
+            if(!nombre) return;
+            e.nombre = nombre; guardarEscuelas(escuelas); pintar();
+          });
+        });
+      });
+      panel.querySelectorAll("[data-escuela-quitar]").forEach(function(b){
+        b.addEventListener("click", function(){
+          var e = escuelas.find(function(x){ return x.id === b.getAttribute("data-escuela-quitar"); });
+          if(!e || escuelas.length < 2) return;
+          confirmar('¿Quitar "'+e.nombre+'" de este equipo? Se borran sus grupos y asistencias guardados aquí (el Excel de Drive no se toca). No se puede deshacer.', function(){
+            var suf = sufijoEscuela(e);
+            localStorage.removeItem("listaAsistenciaData_v2" + suf);
+            localStorage.removeItem("listaAsistenciaCambiosPendientes_v1" + suf);
+            localStorage.removeItem("listaAsistenciaDriveFileId_v1" + suf);
+            borrarCacheEscuela("institucional" + suf);
+            escuelas = escuelas.filter(function(x){ return x.id !== e.id; });
+            guardarEscuelas(escuelas); pintar();
+          });
+        });
+      });
+      document.getElementById("btnEscuelaAgregar").addEventListener("click", function(){
+        var nombre = document.getElementById("escuelaNombre").value.trim();
+        var idDrive = extraerIdDrive(document.getElementById("escuelaDrive").value);
+        if(!nombre){ showToast("Escribe el nombre de la escuela."); return; }
+        if(!idDrive){ showToast("Pega el enlace (o el ID) del Excel de esa escuela en Drive."); return; }
+        if(escuelas.some(function(x){ return x.nombre.trim().toLowerCase() === nombre.toLowerCase(); })){ showToast("Ya existe una escuela con ese nombre."); return; }
+        var nueva = {id: uid(), nombre: nombre, driveFileId: idDrive};
+        escuelas.push(nueva); guardarEscuelas(escuelas);
+        entrar(nueva.id);
+      });
+    }
+    pintar();
+  }
+
+  var escuelas = cargarEscuelas();
+  var escuelaActual = null;
+  try{
+    var idSesionEscuela = sessionStorage.getItem(ESCUELA_SESION_KEY);
+    escuelaActual = escuelas.find(function(e){ return e.id === idSesionEscuela; }) || null;
+  }catch(e){}
+  // Sin escuela elegida en esta sesión: se muestra la pantalla de inicio y no se arranca la app.
+  if(!escuelaActual){ mostrarSelectorEscuelas(); return; }
+  var SUF = sufijoEscuela(escuelaActual);
+  var STORAGE_KEY = "listaAsistenciaData_v2" + SUF;
+  var PENDIENTES_KEY = "listaAsistenciaCambiosPendientes_v1" + SUF;
+  var CACHE_KEY = "institucional" + SUF;
+  document.title = "FullStatus — " + escuelaActual.nombre;
   var ESTADOS = ["P","A","R"];
   var ESTADO_VALOR_EXPORT = {P:1, A:0, R:2};
 
@@ -62,7 +178,7 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       if(markPending !== false){
         cambiosPendientes = true;
-        localStorage.setItem("listaAsistenciaCambiosPendientes_v1", "1");
+        localStorage.setItem(PENDIENTES_KEY, "1");
         if(document.getElementById("connText")) updateConn();
       }
     }
@@ -82,7 +198,7 @@
     return abrirCache().then(function(db){
       return new Promise(function(resolve, reject){
         var tx = db.transaction("archivos", "readwrite");
-        tx.objectStore("archivos").put(buffer, "institucional");
+        tx.objectStore("archivos").put(buffer, CACHE_KEY);
         tx.oncomplete = resolve;
         tx.onerror = function(){ reject(tx.error); };
       });
@@ -91,7 +207,7 @@
   function cargarPlantillaLocal(){
     return abrirCache().then(function(db){
       return new Promise(function(resolve, reject){
-        var request = db.transaction("archivos").objectStore("archivos").get("institucional");
+        var request = db.transaction("archivos").objectStore("archivos").get(CACHE_KEY);
         request.onsuccess = function(){ resolve(request.result || null); };
         request.onerror = function(){ reject(request.error); };
       });
@@ -133,13 +249,13 @@
 
   var plantillaExcel = null;
   var GOOGLE_CLIENT_ID = "814235047466-9bp0f3j15l5eikmpjasgigol9gnvdelv.apps.googleusercontent.com";
-  var GOOGLE_SHEET_ID = "1MyLylWU_26VzjMI8t3JZzDiDkcvsiYTi";
-  var DRIVE_FILE_KEY = "listaAsistenciaDriveFileId_v1";
+  var GOOGLE_SHEET_ID = escuelaActual.driveFileId; // archivo de Drive de la escuela elegida
+  var DRIVE_FILE_KEY = "listaAsistenciaDriveFileId_v1" + SUF;
   var GOOGLE_AUTH_KEY = "listaAsistenciaGoogleDriveAuth_v3";
   var driveFileId = localStorage.getItem(DRIVE_FILE_KEY) || GOOGLE_SHEET_ID;
   var driveTokenClient = null;
   var drivePendingAction = null;
-  var cambiosPendientes = localStorage.getItem("listaAsistenciaCambiosPendientes_v1") === "1";
+  var cambiosPendientes = localStorage.getItem(PENDIENTES_KEY) === "1";
   var sincronizando = false;
 
   function grupoActivo(){ return state.grupos.find(function(g){ return g.id === state.grupoActivoId; }) || null; }
@@ -1663,7 +1779,7 @@
 
   function marcarSincronizado(){
     cambiosPendientes = false;
-    localStorage.removeItem("listaAsistenciaCambiosPendientes_v1");
+    localStorage.removeItem(PENDIENTES_KEY);
     updateConn();
     if(state.hojasPorEliminar && state.hojasPorEliminar.length){ state.hojasPorEliminar = []; saveState(false); }
   }
@@ -1740,9 +1856,16 @@
     resCargando = false;
     render();
   }
+// Solo se muestran resultados de los grupos de la escuela elegida.
+  function normalizaGrupoRes(v){ return String(v == null ? "" : v).trim().replace(/\s+/g, " ").toLowerCase(); }
+  function resEsDeEscuela(f){
+    var nombre = normalizaGrupoRes(f.grupo);
+    return !!nombre && state.grupos.some(function(g){ return normalizaGrupoRes(g.nombre) === nombre; });
+  }
   function resultadosFiltrados(){
     var q = resBusqueda.trim().toLowerCase();
     return resDatos.filas.filter(function(f){
+      if(!resEsDeEscuela(f)) return false;
       if(resMateria && String(f.materia_id) !== resMateria) return false;
       if(resGrupo && f.grupo !== resGrupo) return false;
       if(q && (String(f.nombre||"") + " " + String(f.matricula||"")).toLowerCase().indexOf(q) === -1) return false;
@@ -1777,17 +1900,22 @@
       return html + '<button class="btn" id="btnResActualizar">Cargar resultados</button></div>';
     }
     var grupos = [];
-    resDatos.filas.forEach(function(f){ if(f.grupo && grupos.indexOf(f.grupo) === -1) grupos.push(f.grupo); });
+    resDatos.filas.forEach(function(f){ if(f.grupo && resEsDeEscuela(f) && grupos.indexOf(f.grupo) === -1) grupos.push(f.grupo); });
     grupos.sort();
     html += '<div class="hist-toolbar">';
     html += '<div class="field" style="margin-bottom:0;"><label for="selResMateria">Tipo de examen</label><select id="selResMateria"><option value="">Todos los resultados</option>';
-    Object.keys(resDatos.nombres).forEach(function(id){ html += '<option value="'+esc(id)+'" '+(id===resMateria?"selected":"")+'>'+esc(resDatos.nombres[id])+'</option>'; });
+    // Solo los tipos de examen que tienen resultados en esta escuela.
+    var materiasEscuela = {};
+    resDatos.filas.forEach(function(f){ if(resEsDeEscuela(f)) materiasEscuela[String(f.materia_id)] = true; });
+    Object.keys(resDatos.nombres).filter(function(id){ return materiasEscuela[id]; }).forEach(function(id){ html += '<option value="'+esc(id)+'" '+(id===resMateria?"selected":"")+'>'+esc(resDatos.nombres[id])+'</option>'; });
     html += '</select></div>';
     html += '<div class="field" style="margin-bottom:0;"><label for="selResGrupo">Grupo</label><select id="selResGrupo"><option value="">Todos</option>';
     grupos.forEach(function(gr){ html += '<option value="'+esc(gr)+'" '+(gr===resGrupo?"selected":"")+'>'+esc(gr)+'</option>'; });
     html += '</select></div>';
     html += '<div class="field" style="margin-bottom:0;flex:1;min-width:180px;"><label for="inputResBuscar">Buscar</label><input type="text" id="inputResBuscar" placeholder="Nombre o matrícula" value="'+esc(resBusqueda)+'"></div>';
     html += '<button class="btn secondary" id="btnResActualizar">Actualizar</button><button class="btn secondary" id="btnResSalir">Cerrar sesión</button></div>';
+    var enEscuela = resDatos.filas.filter(resEsDeEscuela).length, deOtros = resDatos.filas.length - enEscuela;
+    html += '<p class="helptext" style="margin-top:0;">Escuela: <b>'+esc(escuelaActual.nombre)+'</b> · '+enEscuela+' resultado(s) de los grupos de esta escuela'+(deOtros ? ' ('+deOtros+' de otros grupos no se muestran)' : '')+'.</p>';
     html += '<div id="resTabla">' + htmlTablaResultados() + '</div></div>';
     return html;
   }
@@ -2200,6 +2328,20 @@
   // así, para cuando el usuario llegue a pulsar "Cargar desde Drive", la librería
   // ya suele estar lista. Si falla aquí, se reintentará automáticamente en el
   // primer clic (asegurarGoogleIdentity reutiliza/relanza la carga).
+  // Botón con la escuela actual: al pulsarlo se vuelve a la pantalla de inicio.
+  (function(){
+    var conn = document.querySelector(".conn");
+    if(!conn) return;
+    var btn = document.createElement("button");
+    btn.className = "btn-escuela";
+    btn.textContent = escuelaActual.nombre + " ▾";
+    btn.title = "Cambiar de escuela";
+    btn.addEventListener("click", function(){
+      try{ sessionStorage.removeItem(ESCUELA_SESION_KEY); }catch(e){}
+      location.reload();
+    });
+    conn.insertBefore(btn, conn.firstChild);
+  })();
   asegurarGoogleIdentity().catch(function(){ /* se reintentará al primer clic */ });
   restaurarCacheLocal().then(function(){
     setTab("pasar");
