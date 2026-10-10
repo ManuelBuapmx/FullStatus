@@ -88,6 +88,15 @@ Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-10-10 — Falla: el campo "Motivo" del justificante no dejaba escribir
+- **Causa:** en Electron, tras cerrar un `confirm()` nativo la ventana pierde el foco del teclado y los campos de texto que se abren después no aceptan escritura. El justificante hacía `confirm()` y luego mostraba el cuadro del motivo.
+- **Arreglo:** nuevo cuadro propio `confirmar(mensaje, alAceptar, alCancelar)` (junto a `pedirTexto`) que sustituye a **todos** los `confirm()` activos de la app (eliminar grupo, quitar alumno, agregar fecha, quitar unidad, cambiar/eliminar fecha, quitar justificante). Marcar una falta como justificada ahora usa un solo cuadro: confirmación + motivo opcional.
+- Regla: no usar `confirm()`, `alert()` ni `prompt()` nativos en la app (Electron); usar `confirmar` / `pedirTexto`. Queda un `confirm()` en `importarArchivoExcel`, función sin uso (código muerto pendiente de borrar).
+
+### 2026-10-09 — Historial: filtro de unidad siempre visible y sin totales
+- Quitados del Historial los totales de **asistencias, faltas equivalentes, retardos y justificadas** (y el cálculo `resumen` en `renderHistorial`); solo queda "días registrados", que cuenta los días visibles: todos, o solo los de la unidad elegida (la etiqueta pasa a "días en <unidad>"). Se conservan la columna "Total presente" por alumno y la regla de 3 retardos = 1 falta (`faltasEquivalentes`) para otros usos.
+- El selector **Unidad** (`selUnidadHistorial`) ahora aparece siempre: si el grupo no tiene unidades queda deshabilitado con "Sin unidades definidas"; si las tiene, permite ver todas o solo la unidad seleccionada (filtra la tabla y "Copiar para pegar en Excel"). Las unidades se definen en "Unidades y periodos" del mismo Historial.
+
 ### 2026-10-09 — Resultados: sin conteo/promedio/porcentaje y filtro por tipo de examen
 - Quitados de la pestaña Resultados el contador de resultados, el promedio y la columna `%`. Se mantiene la columna "Aciertos" (correctas / total).
 - El filtro de materia ahora se llama **Tipo de examen** (`selResMateria`) y su primera opción es "Todos los resultados"; las demás son las materias de la tabla `materias`. Siguen los filtros de grupo y la búsqueda por nombre o matrícula.

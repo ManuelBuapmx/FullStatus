@@ -184,13 +184,9 @@ td.estados{text-align:right;white-space:nowrap;}
 .hist-head h2{margin-bottom:0;}
 .eyebrow{color:var(--accent);font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px;}
 .hist-group-field{width:min(100%, 250px);margin-bottom:0;}
-.hist-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:18px;}
+.hist-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:18px;}
 .hist-summary div{background:var(--surface);padding:12px 14px;color:var(--ink-soft);font-size:.82rem;}
 .hist-summary strong{display:block;color:var(--ink);font-size:1.25rem;line-height:1.1;}
-.hist-summary .summary-P strong{color:var(--presente);}
-.hist-summary .summary-A strong{color:var(--falta);}
-.hist-summary .summary-R strong{color:var(--retardo);}
-.hist-summary .summary-J strong{color:var(--justificada);}
 .hist-legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--ink-soft);font-size:.8rem;margin:0 0 12px 2px;}
 .hist-rule{margin:0 0 12px 2px;}
 .hist-legend b{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;color:#fff;margin-right:4px;}
