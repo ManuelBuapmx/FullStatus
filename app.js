@@ -1136,6 +1136,39 @@
         });
         if(totalCol !== -1) ws.getRow(rowNumber).getCell(totalCol).value = totalP;
       });
+
+      // ------------------------------------------------------------------
+      // CAMBIO 2026-10-10 12:35 a. m. (hora de Ciudad de México)
+      // FALLA CORREGIDA: al quitar un alumno en la app, sus datos quedaban
+      // "duplicados" en el Excel. Los alumnos que quedan se escriben en orden
+      // alfabético desde la primera fila; la fila final que ya no corresponde
+      // a nadie conservaba el nombre, el número y las marcas del alumno
+      // anterior. Ahora se limpian TODAS las filas sobrantes entre el último
+      // alumno vigente y la última fila de alumnos de la plantilla.
+      // REGLAS QUE SE RESPETAN (README): solo se borran valores (nunca se
+      // cambian anchos/altos ni estilos); no se tocan las columnas "Grupo" ni
+      // "No. EQUIPO" ni "EVALUACIÓN"; nunca se toca la hoja "Plantilla" (este
+      // bloque solo corre sobre la hoja del grupo activo, jamás sobre
+      // "Plantilla"); el límite headerRow + 32 es el mismo que usan
+      // eliminarFechaDeHoja y compactarColumnasVacias.
+      // ------------------------------------------------------------------
+      var ultimaFilaAlumno = headerRow + 32;
+      for(var filaSobrante = headerRow + 1 + estudiantesOrdenados.length; filaSobrante <= ultimaFilaAlumno; filaSobrante++){
+        var filaVieja = ws.getRow(filaSobrante);
+        // Número consecutivo de la columna "No." (la que está junto a ALUMNO).
+        if(nameCol > 1) filaVieja.getCell(nameCol - 1).value = null;
+        // Nombre del alumno.
+        filaVieja.getCell(nameCol).value = null;
+        // Marcas de asistencia y notas de justificante, solo en columnas de fecha.
+        Object.keys(fechas).forEach(function(colText){
+          var celdaVieja = filaVieja.getCell(Number(colText));
+          celdaVieja.value = null;
+          celdaVieja.note = undefined;
+        });
+        // Total presente de esa fila.
+        if(totalCol !== -1) filaVieja.getCell(totalCol).value = null;
+      }
+
       Object.keys(fechas).forEach(function(colText){
         var fechaCell = ws.getRow(headerRow).getCell(Number(colText));
         fechaCell.numFmt = "dd/mm/yyyy";
