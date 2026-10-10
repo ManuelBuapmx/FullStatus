@@ -17,23 +17,21 @@ cuando hay internet, sincroniza con el Excel institucional en Google Drive.
 4. **Fechas de Excel siempre en UTC:** escribir con `Date.UTC(...)` (`excelFechaSerial`) y leer con `getUTCFullYear/getUTCMonth/getUTCDate`. Leer con getters locales desplaza un día en zonas UTC negativas (México) y duplica columnas.
 5. **No asumir que las fechas empiezan en la columna de nombre + 1:** en la hoja real son `ALUMNO`, `Grupo`, `No. EQUIPO` y después las fechas (el bloque empieza en la primera cabecera que sea `Date`). `Grupo` y `No. EQUIPO` nunca se tocan al mover/compactar columnas de fechas.
 6. **Antes de editar en lote el xlsx real:** hacer copia, simulación (dry-run), comparar encabezados contra la copia y pedir confirmación.
-7. **Después de cambiar `app.js`, `index.html`, `styles.css` o `vendor/`:** ejecutar `npm run sync:www` para que Android no quede desfasado.
+7. **Proyecto solo de escritorio Windows (Electron):** ya no hay versión Android ni carpeta `www/`; no hay que sincronizar copias. Se edita directamente `app.js`, `index.html`, `styles.css` y `vendor/`.
 8. No subir credenciales, tokens ni datos personales de asistencia.
 9. Mantener el idioma español de la interfaz y el estilo visual existente.
 
 ## Plataformas y arquitectura
 
-Aplicación web de una sola página, en JavaScript puro (sin framework ni bundler), empaquetada para tres destinos:
+Aplicación web de una sola página, en JavaScript puro (sin framework ni bundler), que se usa como programa de escritorio de Windows (Electron). Los destinos Android y web quedaron descartados.
 
 | Destino | Cómo funciona |
 |---|---|
-| Web | `server.cjs` sirve la carpeta raíz en `http://localhost:5173` (`npm run start:web` o `Iniciar FullStatus.bat`). |
 | Windows (Electron) | `electron-main.cjs` levanta un servidor local interno en el puerto 5173 y abre una ventana apuntando a él (necesario para el inicio de sesión de Google). Sirve la carpeta raíz. Se empaqueta con electron-builder (target `nsis`). |
-| Android (Capacitor) | Usa la carpeta `www/` (`webDir`). `www/` es una **copia generada** de la raíz con `npm run sync:www`; no editar a mano. |
 
 - **Archivo de lógica único:** `app.js` (~1800 líneas) es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 3 pestañas, panel y toast) y `app.js` renderiza el resto.
 - **Pestañas:** `Grupos` (crear grupos, alumnos, importar Excel, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos) e `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, copiar al portapapeles, descargar xlsx, actualizar Drive).
-- **Dependencias externas en ejecución:** ExcelJS (local en `vendor/exceljs.min.js`) y Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`). Todo lo demás es offline.
+- **Dependencias externas en ejecución:** Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`). ExcelJS (`vendor/`) y la fuente Inter (`fonts/`) son locales. Todo lo demás es offline.
 
 ## Datos y persistencia
 
@@ -62,29 +60,20 @@ Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor
 |---|---|
 | `index.html`, `styles.css`, `app.js` | Aplicación (interfaz y lógica) |
 | `vendor/exceljs.min.js` | ExcelJS local (para funcionar sin internet) |
+| `fonts/` | Fuente Inter local (`inter-latin-wght-normal.woff2`) y su licencia `OFL.txt` |
 | `server.cjs` | Servidor local para la versión web (`http://localhost:5173`) |
 | `electron-main.cjs` | Ventana de escritorio (Windows) |
-| `capacitor.config.json` | Configuración de la app Android (Capacitor, `webDir: www`) |
-| `sync-www.cjs` | Copia la app de la raíz a `www/` (fuente de Android) |
-| `www/` | Copia generada para Capacitor; no editar a mano |
-| `manifest.webmanifest` | Manifiesto PWA |
-| `Iniciar FullStatus.bat` | Arranca el servidor local y abre el navegador |
-| `package.json` | Scripts (`start:web`, `start:windows`, `dist:windows`, `sync:www`, `sync:android`) y configuración de electron-builder |
+| `package.json` | Scripts (`start:windows`, `dist:windows`) y configuración de electron-builder |
 | `FS.png`, `FullStatus.png` | Icono de la app y logo de arranque |
-| `.github/workflows/build-android-apk.yml` | CI: `npm install`, `cap add android`, `npm run sync:android` y compila el APK debug |
 | `.github/agents/fullstatus-maintainer.agent.md` | Instrucciones del agente de mantenimiento de Copilot |
-| `android/` | Proyecto Android generado por Capacitor (ignorado por git; se recrea en CI) |
 
 Ignorados por git: `node_modules/`, `dist/`, `android/`, `android-build/`, `*.log`.
 
 ## Comandos
 
 ```
-npm run start:web        # servidor local en http://localhost:5173
 npm run start:windows    # ventana de escritorio con Electron
 npm run dist:windows     # instalador de Windows (electron-builder)
-npm run sync:www         # copia la app de la raíz a www/
-npm run sync:android     # sync:www + cap sync android
 ```
 
 > Mantén el proyecto fuera de carpetas sincronizadas con Google Drive: causan errores EPERM al compilar con electron-builder.
@@ -98,6 +87,56 @@ npm run sync:android     # sync:www + cap sync android
 Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
 
 ## Historial de cambios
+
+### 2026-10-09 — Resultados: sin conteo/promedio/porcentaje y filtro por tipo de examen
+- Quitados de la pestaña Resultados el contador de resultados, el promedio y la columna `%`. Se mantiene la columna "Aciertos" (correctas / total).
+- El filtro de materia ahora se llama **Tipo de examen** (`selResMateria`) y su primera opción es "Todos los resultados"; las demás son las materias de la tabla `materias`. Siguen los filtros de grupo y la búsqueda por nombre o matrícula.
+
+### 2026-10-09 — Pestaña "Resultados" (Supabase, solo lectura)
+- Nueva pestaña **Resultados** (`renderResultados`, `supabaseLogin`, `supabaseLeer`, `cargarResultados`, `htmlTablaResultados` en `app.js`): muestra la tabla `resultados` del proyecto de exámenes de Supabase (nombre, matrícula, grupo, materia, aciertos, %, fecha, reanudaciones) con filtros por materia y grupo y búsqueda por nombre o matrícula, más conteo y promedio.
+- **Seguridad:** la RLS del proyecto solo permite leer `resultados` al usuario autenticado con el correo del administrador; sin sesión Supabase devuelve `permission denied` (verificado). La app inicia sesión con correo y contraseña por la API de Auth (`/auth/v1/token`), guarda el token **solo en memoria** (nunca en disco ni `localStorage`) y no guarda la contraseña. La URL y la clave `sb_publishable_…` del proyecto están en `app.js` (son públicas por diseño). Todo es de **solo lectura**: la app nunca escribe en Supabase.
+- Requiere internet; sin conexión muestra un aviso. No se usa Supabase para guardar asistencia: eso sigue en Google Drive.
+- Eliminado `.vscode/mcp.json` (el acceso de Copilot a Supabase ya no se necesita).
+- Pendiente: probar con la cuenta real; la sesión expira cada hora (hay que volver a entrar); límite de 2000 filas más recientes.
+
+### 2026-10-09 — Acceso de Copilot al proyecto de Supabase (solo lectura)
+- Instalada la extensión `supabase.vscode-supabase-extension`; solo conecta con una instancia **local** de Supabase (CLI + Docker), no con el proyecto en la nube.
+- Nuevo `.vscode/mcp.json` con el servidor MCP oficial de Supabase acotado al proyecto `juvqvshcfsrtscvzluaa` y en modo solo lectura (`read_only=true`). No contiene claves: la autenticación se hace por OAuth en el navegador al iniciar el servidor desde VS Code. Aún no se usa Supabase en la app; la integración (respaldo en la nube) está por definir.
+- **Decisión (2026-10-09):** FullStatus **sigue guardando únicamente en Google Drive** (Excel institucional) y `localStorage`/IndexedDB; no se integra Supabase. El proyecto de Supabase existente es de otro sistema (exámenes en línea: `alumnos`, `materias`, `preguntas`, `asignaciones`, `intentos`, `resultados`, `config`) y no debe modificarse desde este repositorio.
+
+### 2026-10-09 — Fechas sin marcas importadas del Excel (`fechasVacias`)
+- Nuevo `state.fechasVacias[grupoId][fechaISO] = true`: fechas que existen como columna en el Excel pero sin ninguna marca. `fechasDelGrupo` ahora devuelve fechas con marcas **más** estas; se registran al importar (`registrarFechasVacias` en `cargarGruposExcelDrive`, `restaurarCacheLocal` y `agregarGruposNuevosDeDrive`, que también las añade a grupos ya existentes). La app nunca crea estas fechas por sí sola.
+- `compactarColumnasVacias` recibe las fechas protegidas del grupo y no quita esas columnas al sincronizar. Cambiar o eliminar una fecha, y eliminar un grupo, también actualizan `fechasVacias`.
+- **Hallazgo:** el 2026-10-09 a las 23:11 una sincronización quitó de la hoja `12F` la columna vacía del 21/09 (era el comportamiento de `compactarColumnasVacias`), por lo que `12F` quedó realmente con 3 fechas en el Excel y en la app. Para tener una cuarta fecha hay que marcar ese día en "Pasar lista".
+- Probado solo con datos de ejemplo (`node`), no en la app.
+
+### 2026-10-09 — Botón "Agregar grupos nuevos del Excel"
+- **Problema:** la lista de grupos es estado local y solo se refrescaba con "Cargar archivo institucional desde Drive" (que reemplaza todo). Una pestaña creada o existente en el Excel de Drive (ej. `12F`, verificada en el archivo real, que se importa bien: 2 alumnos y 4 fechas) no aparecía en la app.
+- **Ahora:** en Grupos, el botón "Agregar grupos nuevos del Excel" (`agregarGruposNuevosDeDrive`) descarga el libro y añade solo las pestañas que no son grupos locales (nunca "Plantilla"), sin reemplazar nada. Se rechaza si hay cambios pendientes (hay que subirlos antes, porque descargar reemplaza la copia local del libro `plantillaExcel`). Solo funciona con el `.xlsx` en Drive, no con hojas de Google nativas.
+- Nota: el Excel institucional está sincronizado con Drive para Windows (carpeta `Documentos\UTTECAM SEP-DIC 2026\Lista de asistencia.xlsx` es el mismo archivo que el de Drive).
+
+### 2026-10-09 — Indicador de conexión y cambios sin guardar
+- El indicador de la cabecera (`updateConn`) ahora distingue cuatro estados: **En línea · todo guardado** (punto verde), **En línea · cambios sin guardar en Drive** (ámbar), **Sin conexión · tus datos se guardan en este equipo** (rojo) y **Sin conexión · cambios sin guardar en Drive** (rojo).
+- **Fallas corregidas:** (1) el color de "sin conexión" nunca se aplicaba, porque la clase `offline` se ponía en el punto pero la regla CSS era `.conn.offline .dot`; ahora la clase va en el contenedor `.conn` (`offline` / `pendiente`). (2) Tras sincronizar con éxito el texto seguía mostrando "cambios pendientes"; `marcarSincronizado` ahora llama a `updateConn`.
+- Regla: el indicador debe mostrar siempre estos estados; cualquier cambio que modifique `cambiosPendientes` o la conexión debe llamar a `updateConn`.
+- Añadido el estado **Sincronizando con Drive…** (punto azul parpadeante, variable `sincronizando`): se activa al inicio de `guardarEnGoogleDrive` y se apaga en su `finally`. Al cargar grupos desde Drive (`cargarGruposExcelDrive` / `cargarGruposGoogle`) ahora se llama a `marcarSincronizado()`, porque el estado local pasa a ser el de Drive y ya no hay cambios por subir.
+
+### 2026-10-09 — Fuente Inter local (offline)
+- La tipografía Inter ya no se descarga de Google Fonts: se usa `fonts/inter-latin-wght-normal.woff2` (variable, pesos 100–900, subconjunto `latin`, 48 KB) declarada con `@font-face` en `styles.css` y licencia en `fonts/OFL.txt` (SIL OFL). Se quitaron los tres `<link>` de Google Fonts de `index.html`, se añadió `.woff2` al mapa MIME de `electron-main.cjs` y `fonts/**/*` a `build.files`.
+- La carpeta `fonts/` está versionada en git (no ignorada), así que la fuente queda en el repositorio y en el instalador aunque no haya internet. Pendiente: recompilar y probar el `.exe` sin conexión.
+
+### 2026-10-09 — Proyecto solo de escritorio Windows: se eliminan Android y copias `www/`
+- El proyecto se enfoca únicamente en la app de escritorio de Windows (Electron). Eliminados: carpeta `android/` (proyecto Capacitor generado, ignorado por git; no contenía claves), `www/` (copia para Android), `capacitor.config.json`, `sync-www.cjs`, `.github/workflows/build-android-apk.yml` y los scripts `sync:www` / `sync:android` de `package.json`.
+- Retirada la versión web y PWA: eliminados `server.cjs`, `Iniciar FullStatus.bat`, `manifest.webmanifest`, el script `start:web`, la etiqueta `<link rel="manifest">` de `index.html`, el tipo MIME `.webmanifest` de `electron-main.cjs` y esos archivos de `build.files`. Para ejecutar la app ahora solo existe `npm run start:windows`.
+- Retirado código móvil/Capacitor: `&& !window.Capacitor` en `iniciarGoogleDrive` (`app.js`), la etiqueta `viewport` de `index.html`, los bloques `@media (max-width:700px)` y `(max-width:420px)` de `styles.css` (la ventana de Electron mide 900 px como mínimo) y las propiedades `touch-action`, `-webkit-overflow-scrolling` y `env(safe-area-inset-bottom)`. El comentario "CORREGIDO" de `index.html` se redujo a una línea.
+- Pendiente de retirar (opcional, requiere prueba visual): `fallbackCopy` del portapapeles y la clase `is-electron`.
+- Retiradas las dependencias `@capacitor/*` (android, core, cli, assets) de `package.json` y regenerado `package-lock.json`; `node_modules` solo conserva `electron` y `electron-builder`. `server.cjs` salió de `build.files` (Electron usa su propio servidor en `electron-main.cjs`).
+
+### 2026-10-09 — La copia local del Excel se actualiza tras sincronizar
+
+- **Falla:** tras subir a Drive, la copia local en IndexedDB (`integratorium_cache_v1`) no se actualizaba. Al reiniciar se restauraba el libro viejo y la siguiente sincronización podía pisar en Drive lo subido antes (otros grupos, fechas nuevas) o resucitar pestañas eliminadas.
+- **Ahora:** `guardarEnGoogleDrive` llama a `guardarPlantillaLocal(resultado.buffer)` justo después de una subida exitosa (en su propio `try/catch`, para que un fallo de caché no cuente como fallo de subida).
+- Pendiente: probar: pasar lista, sincronizar, reiniciar, sincronizar otro grupo y verificar en Drive que el primero conserve sus datos.
 
 ### 2026-10-08 — Eliminar grupo también elimina su pestaña en el Excel
 - **Falla:** "Eliminar este grupo" solo borraba el grupo en la app; su pestaña quedaba en el Excel de Drive (ej. la hoja de prueba `12F` seguía en el archivo pero ya no aparecía en la lista de grupos).
@@ -131,23 +170,20 @@ Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asis
 
 ## Pendientes conocidos
 
-- Unidades: no hay edición (solo agregar/quitar), ni totales de asistencia por unidad en la tabla, ni se importan/exportan al Excel institucional; tampoco se muestra la unidad en "Pasar lista". Probar en Electron y Android (probado solo con `node --check`).
+- Unidades: no hay edición (solo agregar/quitar), ni totales de asistencia por unidad en la tabla, ni se importan/exportan al Excel institucional; tampoco se muestra la unidad en "Pasar lista". Probar en Electron (probado solo con `node --check`).
 - Uso de `confirm()` nativo para varias acciones; funciona en Electron pero conviene unificarlo con el cuadro propio.
 - Alumnos quitados de un grupo dejan filas viejas en el Excel.
 - La sincronización solo escribe el grupo activo (decisión deliberada, pero hay que avisar al usuario).
 - Cargar desde Drive no avisa si hay cambios locales sin subir.
 - [index.html](index.html): comentario "CORREGIDO" de 17 líneas sobre Google Identity Services; reducirlo a una línea.
-- Dependencias: parches de Capacitor 8.5.1 → 8.5.3 disponibles; Electron fijado en `^37` (última 44).
-- `@capacitor/assets` quedó sin uso tras eliminar `resources/`; quitarlo o recrear `resources/icon.png` y `resources/splash.png` si se regeneran iconos.
-- Hacer commit de los cambios sin confirmar (`app.js`, `index.html`, `README.md`, `package.json`, workflow, `www/`, `sync-www.cjs`, borrados).
+- Dependencias: Electron fijado en `^37` (última 44).
+- Hacer commit de los cambios sin confirmar (`app.js`, `README.md`, `package.json`, archivos eliminados).
 
 ## Fallas y riesgos conocidos
 
-- **Sin verificar tras la limpieza del 2026-10-08:** `npm run sync:android` y compilaci\u00f3n del APK; en Android no se ha comprobado que ExcelJS cargue desde `www/vendor/`. (`npm run dist:windows` ya se verific\u00f3 el 2026-10-08: genera `dist/FullStatus Setup 1.0.0.exe`, 92.5 MB; aviso de electron-builder por referencia duplicada de `@capacitor/core`, sin impacto.)
-- `www/index.html` ahora es copia de la raíz e incluye el script que añade la clase `is-electron`; es inofensivo en Android pero no se ha probado visualmente.
+- `npm run dist:windows` se verificó el 2026-10-08 (genera `dist/FullStatus Setup 1.0.0.exe`); tras retirar Android y Capacitor el 2026-10-09 aún no se ha vuelto a compilar.
 - No hay pruebas automatizadas (`npm test` ya no existe).
 - `app.js` es un único archivo grande sin módulos; los cambios deben ser pequeños y localizados.
-- Si se compila Android en local, ejecutar antes `npm run sync:android` (la carpeta `assets/public` ya no existe hasta sincronizar).
 
 ## Mantenimiento de este README
 

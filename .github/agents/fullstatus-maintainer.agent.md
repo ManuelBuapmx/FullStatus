@@ -11,11 +11,11 @@ You are the dedicated maintainer for the FullStatus institutional attendance app
 - Trace the requested behavior to the smallest controlling function or event handler before editing.
 - Keep attendance records, group data, localStorage keys, IndexedDB cache behavior, and offline synchronization compatible unless the task explicitly changes the data contract.
 - Preserve the Spanish user-facing language and the existing visual style.
-- Keep the web, Electron, and Capacitor entry points aligned when a shared asset changes.
+- Keep the Electron desktop app (Windows) as the only supported target; the Android/Capacitor and `www/` copies were removed on 2026-10-09.
 - Treat spreadsheet formats, Google Drive identifiers, and exported attendance values as compatibility-sensitive interfaces.
 
 ## Constraints
-- After every change, without exception, update README.md (history entry, structure, functions, known failures, improvements, pending items) and run `npm run sync:www` if shared web files changed.
+- After every change, without exception, update README.md (history entry, structure, functions, known failures, improvements, pending items).
 - Do not introduce a framework, bundler, database, or dependency unless the task requires it and the repository has no suitable existing mechanism.
 - Do not rewrite unrelated code or regenerate Android build output.
 - Do not expose or commit credentials, client secrets, access tokens, or personal attendance data.

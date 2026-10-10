@@ -30,7 +30,7 @@
     return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
 
-  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {}, justificantes: {}, hojasPorEliminar: [] }; }
+  function defaultState(){ return { grupos: [], grupoActivoId: null, asistencias: {}, justificantes: {}, hojasPorEliminar: [], fechasVacias: {} }; }
   function loadState(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
@@ -40,6 +40,7 @@
       if(!parsed.justificantes) parsed.justificantes = {};
       if(!parsed.asistencias) parsed.asistencias = {};
       if(!Array.isArray(parsed.hojasPorEliminar)) parsed.hojasPorEliminar = [];
+      if(!parsed.fechasVacias) parsed.fechasVacias = {};
       purgarFechasVacias(parsed);
       return parsed;
     }catch(e){ return defaultState(); }
@@ -109,6 +110,7 @@
           var datos = extraerGrupoDeHoja(ws), grupoId = uid();
           grupos.push({id:grupoId, nombre:ws.name, estudiantes:datos ? datos.estudiantes : [], materia:datos ? datos.materia : "", profesor:datos ? datos.profesor : ""});
           asistencias[grupoId] = datos ? datos.asistencias : {};
+          registrarFechasVacias(grupoId, asistencias[grupoId]);
         });
         state.grupos = grupos;
         state.asistencias = asistencias;
@@ -127,7 +129,9 @@
   var pasarSegundaIndex = null;
   var histDesde = "";
   var histHasta = "";
-  var histUnidad = "";  var plantillaExcel = null;
+  var histUnidad = "";
+
+  var plantillaExcel = null;
   var GOOGLE_CLIENT_ID = "814235047466-9bp0f3j15l5eikmpjasgigol9gnvdelv.apps.googleusercontent.com";
   var GOOGLE_SHEET_ID = "1MyLylWU_26VzjMI8t3JZzDiDkcvsiYTi";
   var DRIVE_FILE_KEY = "listaAsistenciaDriveFileId_v1";
@@ -136,6 +140,7 @@
   var driveTokenClient = null;
   var drivePendingAction = null;
   var cambiosPendientes = localStorage.getItem("listaAsistenciaCambiosPendientes_v1") === "1";
+  var sincronizando = false;
 
   function grupoActivo(){ return state.grupos.find(function(g){ return g.id === state.grupoActivoId; }) || null; }
   function ordenarEstudiantes(grupo){
@@ -161,9 +166,21 @@
     return Object.keys(leerAsistenciaBucket(grupoId, fecha)).length > 0;
   }
   function fechasDelGrupo(grupoId){
-    return Object.keys(state.asistencias[grupoId] || {}).filter(function(fecha){
+    var conMarcas = Object.keys(state.asistencias[grupoId] || {}).filter(function(fecha){
       return fechaTieneMarcas(grupoId, fecha);
-    }).sort();
+    });
+    // Fechas que ya existen como columna en el Excel pero sin ninguna marca (importadas).
+    var vacias = Object.keys((state.fechasVacias || {})[grupoId] || {});
+    return conMarcas.concat(vacias.filter(function(f){ return conMarcas.indexOf(f) === -1; })).sort();
+  }
+  // Conserva como días "sin marcas" las fechas del Excel que no tienen ninguna asistencia.
+  function registrarFechasVacias(grupoId, asistenciasPorFecha){
+    Object.keys(asistenciasPorFecha || {}).forEach(function(iso){
+      if(Object.keys(asistenciasPorFecha[iso] || {}).length > 0) return;
+      if(!state.fechasVacias) state.fechasVacias = {};
+      if(!state.fechasVacias[grupoId]) state.fechasVacias[grupoId] = {};
+      state.fechasVacias[grupoId][iso] = true;
+    });
   }
   function faltasEquivalentes(faltas, retardos){ return faltas + Math.floor(retardos / 3); }
 
@@ -232,6 +249,7 @@
     state.grupos.forEach(ordenarEstudiantes);
     if(currentTab === "grupos") panel.innerHTML = renderGrupos();
     else if(currentTab === "pasar") panel.innerHTML = renderPasar();
+    else if(currentTab === "resultados") panel.innerHTML = renderResultados();
     else panel.innerHTML = renderHistorial();
     attachHandlers();
   }
@@ -251,6 +269,7 @@
     html += '<p class="helptext" style="margin-top:0;">El archivo se carga una vez y queda disponible en este dispositivo. Sin conexión, tus cambios se guardan localmente y se sincronizan al volver internet.</p>';
     html += '<button class="btn" id="btnCargarGoogle">Cargar archivo institucional desde Drive</button>';
     html += '<span id="cargarGoogleEstado" class="helptext" style="margin-left:10px;"></span>';
+    html += '<div style="margin-top:10px;"><button class="btn secondary" id="btnAgregarNuevosDrive">Agregar grupos nuevos del Excel</button></div>';
     if(state.grupos.length){
       html += '<div style="margin-top:10px;">' + botonActualizarDrive() + '</div>';
     }
@@ -953,7 +972,7 @@
   // siguientes para no dejar huecos en el bloque de "ASISTENCIAS". Se usa en
   // cada sincronización para mantener las columnas organizadas sin tener que
   // borrar fecha por fecha manualmente.
-  function compactarColumnasVacias(ws, headerRow, nameCol, maxColBusqueda){
+  function compactarColumnasVacias(ws, headerRow, nameCol, maxColBusqueda, protegidas){
     var maxFilaAlumno = headerRow + 32;
     var columnasFecha = [];
     for(var c=nameCol+1; c<=maxColBusqueda; c++){
@@ -963,6 +982,9 @@
     if(columnasFecha.length === 0) return 0;
 
     var conservar = columnasFecha.filter(function(col){
+      var fechaCol = ws.getRow(headerRow).getCell(col).value;
+      var isoCol = fechaCol.getUTCFullYear() + "-" + String(fechaCol.getUTCMonth()+1).padStart(2,"0") + "-" + String(fechaCol.getUTCDate()).padStart(2,"0");
+      if(protegidas && protegidas[isoCol]) return true;
       for(var fila=headerRow+1; fila<=maxFilaAlumno; fila++){
         var val = ws.getRow(fila).getCell(col).value;
         if(val !== null && val !== undefined && val !== "") return true;
@@ -1091,7 +1113,7 @@
       // completamente vacías (sin ninguna marca en ningún alumno) y recorremos
       // el resto hacia la izquierda, para que "Actualizar" también organice
       // las columnas en vez de dejar huecos entre las fechas reales.
-      var columnasVaciasEliminadas = compactarColumnasVacias(ws, headerRow, nameCol, maxCol);
+      var columnasVaciasEliminadas = compactarColumnasVacias(ws, headerRow, nameCol, maxCol, (state.fechasVacias || {})[grupo.id]);
       if(columnasVaciasEliminadas > 0){
         avisos.push('Se organizaron las columnas de "'+grupo.nombre+'": se quitaron '+columnasVaciasEliminadas+' columna(s) de fecha vacía(s).');
       }
@@ -1268,7 +1290,7 @@
   // asegura (con reintentos) de que la librería de Google esté cargada; así
   // un corte de red momentáneo ya no deja el botón inutilizado para siempre.
   function iniciarGoogleDrive(action){
-    if(location.protocol === "file:" && !window.Capacitor){
+    if(location.protocol === "file:"){
       showToast("Abre FullStatus desde http://localhost para iniciar sesión con Google.");
       return;
     }
@@ -1346,10 +1368,49 @@
     state.grupos = grupos;
     state.asistencias = asistencias;
     state.hojasPorEliminar = [];
+    state.fechasVacias = {};
+    Object.keys(asistencias).forEach(function(id){ registrarFechasVacias(id, asistencias[id]); });
     state.grupoActivoId = grupos[0].id;
     saveState(false);
+    marcarSincronizado(); // el estado local ya es el de Drive
     render();
     showToast(grupos.length+" grupo(s) cargado(s) desde Drive.");
+  }
+
+  // Agrega solo las pestañas del Excel que aún no son grupos locales, sin reemplazar lo existente.
+  async function agregarGruposNuevosDeDrive(accessToken){
+    if(cambiosPendientes){
+      showToast('Primero sube tus cambios pendientes con "Actualizar en Google Drive".');
+      return;
+    }
+    var workbook = await descargarWorkbookInstitucional(accessToken);
+    var nuevos = [], fechasAgregadas = 0;
+    workbook.worksheets.forEach(function(ws){
+      if(esHojaPlantilla(ws.name)) return;
+      var existente = state.grupos.find(function(g){ return g.nombre.trim().toLowerCase() === ws.name.trim().toLowerCase(); });
+      if(existente){
+        // Grupo ya conocido: solo se añaden las fechas sin marcas que existan como columna en el Excel.
+        var datosExistente = extraerGrupoDeHoja(ws);
+        if(!datosExistente) return;
+        var antes = fechasDelGrupo(existente.id).length;
+        registrarFechasVacias(existente.id, datosExistente.asistencias);
+        fechasAgregadas += fechasDelGrupo(existente.id).length - antes;
+        return;
+      }
+      var datos = extraerGrupoDeHoja(ws);
+      var grupoId = uid();
+      state.grupos.push({id:grupoId, nombre:ws.name, estudiantes:datos ? datos.estudiantes : [], materia:datos ? datos.materia : "", profesor:datos ? datos.profesor : ""});
+      state.asistencias[grupoId] = datos ? datos.asistencias : {};
+      registrarFechasVacias(grupoId, state.asistencias[grupoId]);
+      nuevos.push(ws.name);
+    });
+    if(!nuevos.length && !fechasAgregadas){ showToast("No hay grupos ni fechas nuevas en el Excel."); return; }
+    saveState(false);
+    render();
+    var partes = [];
+    if(nuevos.length) partes.push("Grupos agregados: " + nuevos.join(", "));
+    if(fechasAgregadas) partes.push(fechasAgregadas + " fecha(s) sin marcas agregada(s)");
+    showToast(partes.join(". ") + ".");
   }
 
   async function cargarGruposGoogle(accessToken){
@@ -1427,6 +1488,7 @@
     state.hojasPorEliminar = [];
     state.grupoActivoId = grupos[0].id;
     saveState(false);
+    marcarSincronizado(); // el estado local ya es el de Drive
     if(estadoEl) estadoEl.textContent = "";
     render();
     showToast(grupos.length+" grupo(s) cargado(s) desde Google Sheets.");
@@ -1560,6 +1622,8 @@
   }
 
   async function guardarEnGoogleDrive(accessToken){
+    sincronizando = true;
+    updateConn();
     try{
       var fileInfo = await fetch("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(GOOGLE_SHEET_ID)+"?fields=mimeType", {
         headers: {Authorization:"Bearer "+accessToken}
@@ -1583,6 +1647,20 @@
             var uploadDetail = await upload.text();
             throw new Error("No se pudo actualizar el Excel institucional (HTTP "+upload.status+"): "+uploadDetail.slice(0,160));
           }
+
+          // La subida a Drive tuvo éxito, así que la copia local en IndexedDB
+          // debe quedar igual a lo que ya está en Drive. Sin esto, al reiniciar
+          // la app restaurarCacheLocal() cargaba el libro viejo (sin las fechas,
+          // alumnos y pestañas recién sincronizados) y la siguiente sincronización
+          // podía pisar en Drive esos cambios o resucitar pestañas eliminadas.
+          // Va en su propio try/catch: un fallo al guardar la caché no debe
+          // convertir en error una subida que sí se completó.
+          try{
+            await guardarPlantillaLocal(resultado.buffer);
+          }catch(errorCache){
+            console.error("No se pudo actualizar la copia local tras sincronizar", errorCache);
+          }
+
           showToast(resultado.avisos.length ? resultado.avisos.join(" ") : "Archivo institucional actualizado en Drive.");
           return true;
         }
@@ -1593,12 +1671,16 @@
       console.error(error);
       showToast(error.message || "No se pudo actualizar Google Sheets. Verifica el acceso y la API.");
       return false;
+    }finally{
+      sincronizando = false;
+      updateConn();
     }
   }
 
   function marcarSincronizado(){
     cambiosPendientes = false;
     localStorage.removeItem("listaAsistenciaCambiosPendientes_v1");
+    updateConn();
     if(state.hojasPorEliminar && state.hojasPorEliminar.length){ state.hojasPorEliminar = []; saveState(false); }
   }
   function sincronizarPendientes(){
@@ -1630,9 +1712,147 @@
   }
 
   // =========================================================
+  // RESULTADOS (Supabase, solo lectura)
+  // =========================================================
+  // La URL y la clave publishable son públicas por diseño; la tabla "resultados"
+  // solo se puede leer iniciando sesión como el administrador (política RLS).
+  var SUPABASE_URL = "https://juvqvshcfsrtscvzluaa.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_IYf3ISEUGCRGKEM2Bnq1UQ_qFkBHvk5";
+  var resToken = null; // solo en memoria; nunca se guarda en disco
+  var resDatos = null;
+  var resMensaje = "";
+  var resCargando = false;
+  var resMateria = "", resGrupo = "", resBusqueda = "";
+
+  async function supabaseLogin(correo, contrasena){
+    var r = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method: "POST",
+      headers: {"apikey": SUPABASE_KEY, "Content-Type": "application/json"},
+      body: JSON.stringify({email: correo, password: contrasena})
+    });
+    if(!r.ok) throw new Error("Correo o contraseña incorrectos.");
+    var datos = await r.json();
+    return datos.access_token;
+  }
+  async function supabaseLeer(ruta){
+    var r = await fetch(SUPABASE_URL + "/rest/v1/" + ruta, {
+      headers: {"apikey": SUPABASE_KEY, "Authorization": "Bearer " + resToken}
+    });
+    if(r.status === 401 || r.status === 403){ resToken = null; resDatos = null; throw new Error("La sesión expiró. Inicia sesión de nuevo."); }
+    if(!r.ok) throw new Error("No se pudieron leer los resultados (HTTP " + r.status + ").");
+    return r.json();
+  }
+  async function cargarResultados(){
+    resCargando = true; resMensaje = ""; render();
+    try{
+      var materias = await supabaseLeer("materias?select=id,nombre");
+      var filas = await supabaseLeer("resultados?select=id,nombre,matricula,grupo,correctas,total,materia_id,creado_en,reanudaciones,motivo&order=creado_en.desc&limit=2000");
+      var nombres = {};
+      materias.forEach(function(m){ nombres[m.id] = m.nombre; });
+      resDatos = {nombres: nombres, filas: filas};
+    }catch(err){
+      resMensaje = err.message || "No se pudieron cargar los resultados.";
+    }
+    resCargando = false;
+    render();
+  }
+  function resultadosFiltrados(){
+    var q = resBusqueda.trim().toLowerCase();
+    return resDatos.filas.filter(function(f){
+      if(resMateria && String(f.materia_id) !== resMateria) return false;
+      if(resGrupo && f.grupo !== resGrupo) return false;
+      if(q && (String(f.nombre||"") + " " + String(f.matricula||"")).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+  }
+  function htmlTablaResultados(){
+    var filas = resultadosFiltrados();
+    if(filas.length === 0) return '<p class="empty">No hay resultados con estos filtros.</p>';
+    var html = '<div class="table-scroll"><table class="matriz"><thead><tr><th>Alumno</th><th>Matrícula</th><th>Grupo</th><th>Tipo de examen</th><th>Aciertos</th><th>Fecha</th><th>Reanud.</th></tr></thead><tbody>';
+    filas.forEach(function(f){
+      var fecha = f.creado_en ? new Date(f.creado_en).toLocaleString("es-MX") : "";
+      html += '<tr><td title="'+esc(f.nombre||"")+'">'+esc(f.nombre||"")+'</td><td>'+esc(f.matricula||"")+'</td><td>'+esc(f.grupo||"")+'</td><td>'+esc(resDatos.nombres[f.materia_id]||"")+'</td><td>'+f.correctas+" / "+f.total+'</td><td>'+esc(fecha)+'</td><td title="'+esc(f.motivo||"")+'">'+(f.reanudaciones||0)+'</td></tr>';
+    });
+    return html + "</tbody></table></div>";
+  }
+  function renderResultados(){
+    var html = '<div class="card"><div class="eyebrow">Solo lectura</div><h2>Resultados de los exámenes</h2>';
+    if(!navigator.onLine) return html + '<p class="empty">Sin conexión: los resultados se consultan en línea.</p></div>';
+    if(!resToken){
+      html += '<p class="helptext" style="margin-top:0;">Inicia sesión con la cuenta de administrador para ver los resultados. La contraseña no se guarda en este equipo.</p>';
+      if(resMensaje) html += '<p class="helptext" style="color:var(--falta);">'+esc(resMensaje)+'</p>';
+      html += '<div class="row" style="align-items:flex-end;">';
+      html += '<div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label for="resCorreo">Correo</label><input type="email" id="resCorreo" autocomplete="username"></div>';
+      html += '<div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label for="resClave">Contraseña</label><input type="password" id="resClave" autocomplete="current-password"></div>';
+      html += '<button class="btn" id="btnResEntrar">Entrar</button></div></div>';
+      return html;
+    }
+    if(resCargando) return html + '<p class="empty">Cargando resultados…</p></div>';
+    if(!resDatos){
+      if(resMensaje) html += '<p class="helptext" style="color:var(--falta);">'+esc(resMensaje)+'</p>';
+      return html + '<button class="btn" id="btnResActualizar">Cargar resultados</button></div>';
+    }
+    var grupos = [];
+    resDatos.filas.forEach(function(f){ if(f.grupo && grupos.indexOf(f.grupo) === -1) grupos.push(f.grupo); });
+    grupos.sort();
+    html += '<div class="hist-toolbar">';
+    html += '<div class="field" style="margin-bottom:0;"><label for="selResMateria">Tipo de examen</label><select id="selResMateria"><option value="">Todos los resultados</option>';
+    Object.keys(resDatos.nombres).forEach(function(id){ html += '<option value="'+esc(id)+'" '+(id===resMateria?"selected":"")+'>'+esc(resDatos.nombres[id])+'</option>'; });
+    html += '</select></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="selResGrupo">Grupo</label><select id="selResGrupo"><option value="">Todos</option>';
+    grupos.forEach(function(gr){ html += '<option value="'+esc(gr)+'" '+(gr===resGrupo?"selected":"")+'>'+esc(gr)+'</option>'; });
+    html += '</select></div>';
+    html += '<div class="field" style="margin-bottom:0;flex:1;min-width:180px;"><label for="inputResBuscar">Buscar</label><input type="text" id="inputResBuscar" placeholder="Nombre o matrícula" value="'+esc(resBusqueda)+'"></div>';
+    html += '<button class="btn secondary" id="btnResActualizar">Actualizar</button><button class="btn secondary" id="btnResSalir">Cerrar sesión</button></div>';
+    html += '<div id="resTabla">' + htmlTablaResultados() + '</div></div>';
+    return html;
+  }
+
+  // =========================================================
   // EVENTOS
   // =========================================================
   function attachHandlers(){
+    var btnResEntrar = document.getElementById("btnResEntrar");
+    if(btnResEntrar){
+      var entrar = function(){
+        var correo = document.getElementById("resCorreo").value.trim();
+        var claveInput = document.getElementById("resClave");
+        var clave = claveInput.value;
+        if(!correo || !clave){ showToast("Escribe tu correo y contraseña."); return; }
+        claveInput.value = "";
+        supabaseLogin(correo, clave).then(function(token){
+          resToken = token; resMensaje = "";
+          return cargarResultados();
+        }).catch(function(err){
+          resMensaje = err.message || "No se pudo iniciar sesión.";
+          render();
+        });
+      };
+      btnResEntrar.addEventListener("click", entrar);
+      document.getElementById("resClave").addEventListener("keydown", function(ev){ if(ev.key === "Enter") entrar(); });
+    }
+    var btnResActualizar = document.getElementById("btnResActualizar");
+    if(btnResActualizar) btnResActualizar.addEventListener("click", cargarResultados);
+    var btnResSalir = document.getElementById("btnResSalir");
+    if(btnResSalir) btnResSalir.addEventListener("click", function(){ resToken = null; resDatos = null; resMensaje = ""; render(); });
+    var selResMateria = document.getElementById("selResMateria");
+    if(selResMateria) selResMateria.addEventListener("change", function(){ resMateria = selResMateria.value; document.getElementById("resTabla").innerHTML = htmlTablaResultados(); });
+    var selResGrupo = document.getElementById("selResGrupo");
+    if(selResGrupo) selResGrupo.addEventListener("change", function(){ resGrupo = selResGrupo.value; document.getElementById("resTabla").innerHTML = htmlTablaResultados(); });
+    var inputResBuscar = document.getElementById("inputResBuscar");
+    if(inputResBuscar) inputResBuscar.addEventListener("input", function(){ resBusqueda = inputResBuscar.value; document.getElementById("resTabla").innerHTML = htmlTablaResultados(); });
+
+    var btnAgregarNuevosDrive = document.getElementById("btnAgregarNuevosDrive");
+    if(btnAgregarNuevosDrive) btnAgregarNuevosDrive.addEventListener("click", function(){
+      if(!navigator.onLine){ showToast("Sin conexión: no se puede leer el Excel de Drive."); return; }
+      iniciarGoogleDrive(function(accessToken){
+        agregarGruposNuevosDeDrive(accessToken).catch(function(err){
+          console.error(err);
+          showToast(err.message || "No se pudieron agregar los grupos nuevos.");
+        });
+      });
+    });
+
     var btnCargarGoogle = document.getElementById("btnCargarGoogle");
     if(btnCargarGoogle) btnCargarGoogle.addEventListener("click", function(){
       iniciarGoogleDrive(function(accessToken){
@@ -1659,6 +1879,7 @@
       state.grupos = state.grupos.filter(function(x){ return x.id !== g.id; });
       delete state.asistencias[g.id];
       delete state.justificantes[g.id];
+      if(state.fechasVacias) delete state.fechasVacias[g.id];
       state.grupoActivoId = state.grupos.length ? state.grupos[0].id : null;
       pasarIndex = null;
       saveState(); render();
@@ -1879,8 +2100,12 @@
         return;
       }
       if(!confirm('¿Cambiar el '+displayFecha(fechaVieja)+' por el '+displayFecha(fechaNueva)+' en "'+g.nombre+'"?')) return;
-      state.asistencias[g.id][fechaNueva] = state.asistencias[g.id][fechaVieja];
+      state.asistencias[g.id][fechaNueva] = state.asistencias[g.id][fechaVieja] || {};
       delete state.asistencias[g.id][fechaVieja];
+      if(state.fechasVacias && state.fechasVacias[g.id] && state.fechasVacias[g.id][fechaVieja]){
+        delete state.fechasVacias[g.id][fechaVieja];
+        state.fechasVacias[g.id][fechaNueva] = true;
+      }
       if(pasarFecha === fechaVieja) pasarFecha = fechaNueva;
       saveState(); render();
       renombrarFechaDelExcelInstitucional(g.nombre, fechaVieja, fechaNueva).then(function(){
@@ -1894,6 +2119,7 @@
       var fecha = document.getElementById("selFechaEditar").value;
       if(!confirm('¿Eliminar por completo el '+displayFecha(fecha)+' de "'+g.nombre+'"? Se recorrerán las fechas siguientes en el Excel institucional para no dejar columnas vacías. No se puede deshacer.')) return;
       delete state.asistencias[g.id][fecha];
+      if(state.fechasVacias && state.fechasVacias[g.id]) delete state.fechasVacias[g.id][fecha];
       saveState(); render();
       eliminarFechaDelExcelInstitucional(g.nombre, fecha).then(function(){
         showToast("Fecha "+displayFecha(fecha)+" eliminada y columnas recorridas en el Excel.");
@@ -1956,8 +2182,15 @@
   // =========================================================
   function updateConn(){
     var ind = document.getElementById("connIndicator"), txt = document.getElementById("connText");
-    if(navigator.onLine){ ind.classList.remove("offline"); txt.textContent = cambiosPendientes ? "En línea · cambios pendientes" : "En línea"; }
-    else { ind.classList.add("offline"); txt.textContent = "Sin conexión — tus datos se guardan en este dispositivo"; }
+    if(!ind || !txt) return;
+    var caja = ind.parentNode;
+    var enLinea = navigator.onLine;
+    caja.classList.toggle("offline", !enLinea);
+    caja.classList.toggle("pendiente", enLinea && cambiosPendientes);
+    caja.classList.toggle("sincronizando", enLinea && sincronizando);
+    if(enLinea && sincronizando){ txt.textContent = "Sincronizando con Drive…"; return; }
+    if(!enLinea) txt.textContent = cambiosPendientes ? "Sin conexión · cambios sin guardar en Drive" : "Sin conexión · tus datos se guardan en este equipo";
+    else txt.textContent = cambiosPendientes ? "En línea · cambios sin guardar en Drive" : "En línea · todo guardado";
   }
   window.addEventListener("online", function(){ updateConn(); sincronizarPendientes(); });
   window.addEventListener("offline", updateConn);

@@ -2,12 +2,7 @@
 <html lang="es-MX">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FullStatus</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -43,6 +38,7 @@
   <button data-tab="grupos" id="tabBtnGrupos">Grupos</button>
   <button data-tab="pasar" id="tabBtnPasar">Pasar lista</button>
   <button data-tab="historial" id="tabBtnHistorial">Historial y exportar</button>
+  <button data-tab="resultados" id="tabBtnResultados">Resultados</button>
 </nav>
 
 <section class="panel" id="panelContent"></section>
@@ -55,22 +51,7 @@
 <!-- ExcelJS se sirve localmente (vendor/), así que no depende de la red. -->
 <script src="vendor/exceljs.min.js"></script>
 
-<!-- CORREGIDO: Google Identity Services (GIS) SÍ se vuelve a cargar aquí de
-     forma estática, con "defer" para no bloquear el renderizado inicial.
-     Antes se había quitado este <script> para que un solo fallo de red no
-     dejara "window.google" indefinido para siempre; pero app.js nunca llegó
-     a implementar la carga dinámica de reemplazo prometida en el comentario
-     anterior, así que el resultado real era que Google NUNCA se cargaba y el
-     botón de Drive fallaba siempre, con o sin conexión.
-
-     Ahora app.js SÍ implementa esa carga dinámica con reintentos
-     (ver la función asegurarGoogleIdentity en app.js): si este <script>
-     estático llega a fallar por cualquier motivo (bloqueador, red lenta al
-     arrancar, etc.), asegurarGoogleIdentity detecta que "window.google"
-     sigue sin existir e inyecta el mismo script de nuevo por código,
-     reintentando varias veces con espera creciente antes de avisarle al
-     usuario que no hay conexión. Así queda cubierto tanto el caso normal
-     (este <script> carga bien) como cualquier falla de red puntual. -->
+<!-- Google Identity Services: si este script falla, app.js (asegurarGoogleIdentity) lo vuelve a inyectar con reintentos. -->
 <script src="https://accounts.google.com/gsi/client" defer></script>
 
 <script src="app.js"></script>
