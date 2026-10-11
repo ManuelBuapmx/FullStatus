@@ -27,8 +27,8 @@
   // --- Configuración -------------------------------------------------------
   // La clave anon es pública por diseño (la seguridad real está en las políticas
   // y funciones de Supabase). NUNCA poner aquí la Secret key (service_role).
-  const SUPABASE_URL = 'https://TU-PROYECTO.supabase.co';
-  const SUPABASE_ANON_KEY = 'TU_CLAVE_ANON_PUBLICA';
+  const SUPABASE_URL = 'https://juvqvshcfsrtscvzluaa.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_IYf3ISEUGCRGKEM2Bnq1UQ_qFkBHvk5';
 
   // Claves de localStorage. La primera es la de app.js (no cambiarla).
   const CLAVE_ESTADO = 'listaAsistenciaData_v2';
