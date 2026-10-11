@@ -6,6 +6,14 @@
    Publica las asistencias de FullStatus en Supabase para que cada alumno las
    consulte desde la app FullStatus Student.
 
+   CAMBIO (10/oct/2026): además de las asistencias, ahora se publican las UNIDADES
+   de cada grupo (nombre + fecha inicial y final, las de Historial → "Unidades y
+   periodos"). Viajan dentro de cada grupo del envío, en la clave "unidades", y la
+   función RPC publicar_asistencias las guarda en la tabla "unidades" de Supabase.
+   Con ellas la app del alumno arma sus botones Materia → Unidad y recorta las
+   asistencias por periodo. El arreglo se manda SIEMPRE (aunque esté vacío): así, si
+   se quitan todas las unidades de un grupo, también se borran en Supabase.
+
    Cómo funciona:
    - Lee el estado local (`localStorage.listaAsistenciaData_v2`), que sigue
      siendo la fuente de verdad. NO cambia el modelo de datos ni el Excel.
@@ -51,7 +59,7 @@
   let pendiente = false;      // hubo cambios mientras se subía
   let temporizador = null;    // debounce
   let ultimoEnviado = '';     // evita reenviar exactamente lo mismo
-  const info = { estado: 'sin sesión', registros: 0, sinMatch: [], ambiguos: [], error: '' };
+  const info = { estado: 'sin sesión', registros: 0, unidades: 0, sinMatch: [], ambiguos: [], error: '' };
 
   // ==========================================================================
   // Construcción del envío a partir del estado local
@@ -60,6 +68,7 @@
   // Convierte el estado de FullStatus a lo que espera `publicar_asistencias`.
   // Modelo (ver README): asistencias[grupoId][fechaISO][estudianteId] = 'P'|'A'|'R'
   //                      justificantes[grupoId][fechaISO][estudianteId] = { nota }
+  //                      grupo.unidades = [{ id, nombre, desde, hasta }]
   function construirPayload() {
     let estado;
     try {
@@ -94,7 +103,16 @@
         return { nombre: est.nombre, marcas: marcas };
       });
 
-      return { id: String(g.id), nombre: g.nombre || '', materia: g.materia || '', alumnos: alumnos };
+      // Unidades del grupo, en el mismo orden que ve el profesor en FullStatus (por fecha
+      // inicial). El servidor numera las unidades según su posición en este arreglo.
+      const unidades = (Array.isArray(g.unidades) ? g.unidades : [])
+        .slice()
+        .sort(function (a, b) { return a.desde < b.desde ? -1 : (a.desde > b.desde ? 1 : 0); })
+        .map(function (u) {
+          return { nombre: String(u.nombre || ''), desde: u.desde, hasta: u.hasta };
+        });
+
+      return { id: String(g.id), nombre: g.nombre || '', materia: g.materia || '', unidades: unidades, alumnos: alumnos };
     });
 
     return { grupos: grupos };
@@ -190,6 +208,7 @@
     }
     const payload = construirPayload();
     if (!payload) return;
+    // El texto incluye las unidades: si solo cambian las unidades también se vuelve a subir.
     const texto = JSON.stringify(payload);
     if (!manual && texto === ultimoEnviado) return;
 
@@ -217,6 +236,7 @@
 
       ultimoEnviado = texto;
       info.registros = datos.registros || 0;
+      info.unidades = datos.unidades || 0;
       info.sinMatch = datos.sin_match || [];
       info.ambiguos = datos.ambiguos || [];
       const hora = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
@@ -330,6 +350,7 @@
     } else {
       // --- Con sesión
       if (info.registros) cajaCuerpo.appendChild(el('div', 'Registros publicados: ' + info.registros));
+      if (info.unidades) cajaCuerpo.appendChild(el('div', 'Unidades publicadas: ' + info.unidades));
       if (info.sinMatch.length) {
         cajaCuerpo.appendChild(lista(
           'Sin matrícula en Supabase (no verán sus asistencias):', info.sinMatch, 'aviso'));
@@ -385,6 +406,8 @@
 
   // Engancha el guardado de app.js SIN editarlo: cada vez que escribe su estado
   // en localStorage, se programa una subida. La subida solo LEE el estado.
+  // (Agregar o quitar una unidad también pasa por saveState de app.js, así que dispara
+  // la subida sin necesidad de marcar "cambios pendientes" de Drive.)
   const setItemOriginal = Storage.prototype.setItem;
   Storage.prototype.setItem = function (clave) {
     const resultado = setItemOriginal.apply(this, arguments);
