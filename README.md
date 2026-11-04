@@ -11,17 +11,16 @@ cuando hay internet, sincroniza con el Excel institucional en Google Drive.
 
 ## Reglas obligatorias para quien modifique el proyecto (personas e IAs)
 
-1. **Actualizar este README en cada cambio, sin excepción:** funciones nuevas o modificadas, fallas encontradas, mejoras, cambios pendientes, archivos creados/borrados, comandos y decisiones. Registrar en "Historial de cambios" **con fecha y hora (hora de Ciudad de México)** y mantener al día "Pendientes conocidos" y "Fallas conocidas".
+1. **Actualizar este README en cada cambio, sin excepción:** funciones nuevas o modificadas, fallas encontradas, mejoras, cambios pendientes, archivos creados/borrados, comandos y decisiones. Registrar en "Historial de cambios" (con fecha y hora) y mantener al día "Pendientes conocidos" y "Fallas conocidas".
 2. **La hoja "Plantilla" del Excel institucional es intocable:** nunca borrarla, renombrarla ni escribir datos en ella (ni en scripts de diagnóstico). Solo se lee para clonar hojas de grupos nuevos. Debe permanecer vacía/neutral. Si un cambio podría tocarla, detenerse y preguntar.
 3. **Tamaños de celda idénticos a "Plantilla":** anchos de columna y altos de fila de cada hoja de grupo deben ser iguales a los de "Plantilla". Si el texto no cabe, reducir el tamaño de fuente; nunca redimensionar celdas.
 4. **Fechas de Excel siempre en UTC:** escribir con `Date.UTC(...)` (`excelFechaSerial`) y leer con `getUTCFullYear/getUTCMonth/getUTCDate`. Leer con getters locales desplaza un día en zonas UTC negativas (México) y duplica columnas.
-5. **No asumir que las fechas empiezan en la columna de nombre + 1:** en la hoja real son `ALUMNO`, `Grupo`, `No. EQUIPO` y después las fechas (el bloque empieza en la primera cabecera que sea `Date`). `Grupo` y `No. EQUIPO` nunca se tocan al mover/compactar columnas de fechas ni al limpiar filas de alumnos.
+5. **No asumir que las fechas empiezan en la columna de nombre + 1:** en la hoja real son `ALUMNO`, `Grupo`, `No. EQUIPO` y después las fechas (el bloque empieza en la primera cabecera que sea `Date`). `Grupo` y `No. EQUIPO` nunca se tocan al mover/compactar columnas de fechas.
 6. **Antes de editar en lote el xlsx real:** hacer copia, simulación (dry-run), comparar encabezados contra la copia y pedir confirmación.
 7. **Proyecto solo de escritorio Windows (Electron):** ya no hay versión Android ni carpeta `www/`; no hay que sincronizar copias. Se edita directamente `app.js`, `index.html`, `styles.css` y `vendor/`.
 8. No subir credenciales, tokens ni datos personales de asistencia.
 9. Mantener el idioma español de la interfaz y el estilo visual existente.
-10. **Entregar archivos completos y comentados:** cada cambio se entrega como archivo completo listo para reemplazar (nunca fragmentos), con comentarios en el código que indiquen qué se cambió, por qué, la fecha y la hora, y qué reglas de este README se respetan.
-11. No usar `confirm()`, `alert()` ni `prompt()` nativos (Electron); usar `confirmar` / `pedirTexto`.
+10. No usar `confirm()`, `alert()` ni `prompt()` nativos (Electron): usar `confirmar` / `pedirTexto`.
 
 ## Plataformas y arquitectura
 
@@ -31,9 +30,9 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 |---|---|
 | Windows (Electron) | `electron-main.cjs` levanta un servidor local interno en el puerto 5173 y abre una ventana apuntando a él (necesario para el inicio de sesión de Google). Sirve la carpeta raíz. Se empaqueta con electron-builder (target `nsis`). |
 
-- **Archivo de lógica único:** `app.js` (~1800 líneas) es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 4 pestañas, panel y toast) y `app.js` renderiza el resto.
-- **Pestañas:** `Grupos` (crear grupos, alumnos, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos), `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, copiar al portapapeles, descargar xlsx, actualizar Drive) y `Resultados` (Supabase, solo lectura).
-- **Dependencias externas en ejecución:** Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`). ExcelJS (`vendor/`) y la fuente Inter (`fonts/`) son locales. Todo lo demás es offline.
+- **Archivo de lógica único:** `app.js` es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 4 pestañas, panel y toast) y `app.js` renderiza el resto.
+- **Pestañas:** `Grupos` (crear grupos, alumnos, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos), `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, unidades y periodos, copiar al portapapeles, descargar xlsx, actualizar Drive) y `Resultados` (lectura de los exámenes en Supabase, solo lectura).
+- **Dependencias externas en ejecución:** Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`) y Supabase (solo la pestaña Resultados). ExcelJS (`vendor/`) y la fuente Inter (`fonts/`) son locales. Todo lo demás es offline.
 
 ## Datos y persistencia
 
@@ -43,11 +42,19 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 | `localStorage` `listaAsistenciaCambiosPendientes_v1` | `"1"` si hay cambios sin subir a Drive |
 | `localStorage` `listaAsistenciaDriveFileId_v1` | Id del archivo de Drive usado |
 | `localStorage` `listaAsistenciaGoogleDriveAuth_v3` | Marca de que ya se concedió permiso (evita pedir consentimiento otra vez) |
-| `localStorage` `fullstatusEscuelas_v1` | Lista de escuelas `[{id, nombre, driveFileId, original?}]`. La escuela `original` usa las claves de siempre; las demás agregan el sufijo `__<id>` a `listaAsistenciaData_v2`, `listaAsistenciaCambiosPendientes_v1`, `listaAsistenciaDriveFileId_v1` y a la clave `institucional` de IndexedDB |
-| `sessionStorage` `fullstatusEscuelaSesion_v1` | Id de la escuela elegida en esta sesión (si no existe, se muestra la pantalla de inicio) |
 | IndexedDB `integratorium_cache_v1` | Copia local del Excel institucional (`plantillaExcel`) para trabajar sin conexión; se restaura al iniciar con `restaurarCacheLocal` |
 
-Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor, unidades?: [{id, nombre, desde, hasta}] }`; `asistencias[grupoId][fechaISO][estudianteId]` con estados `P` (asistencia, exporta `1`), `A` (falta, `0`) y `R` (retardo, `2`); `justificantes[grupoId][fechaISO][estudianteId] = { nota }`. Una fecha existe solo si tiene al menos una marca (`purgarFechasVacias` limpia las vacías al cargar), salvo las importadas del Excel sin marcas (`fechasVacias`). **No cambiar estas claves ni el formato sin plan de migración.**
+Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor, unidades?: [{id, nombre, desde, hasta}] }`; `asistencias[grupoId][fechaISO][estudianteId]` con estados `P` (asistencia, exporta `1`), `A` (falta, `0`) y `R` (retardo, `2`); `justificantes[grupoId][fechaISO][estudianteId] = { nota }`. Una fecha existe solo si tiene al menos una marca (`purgarFechasVacias` limpia las vacías al cargar). **No cambiar estas claves ni el formato sin plan de migración.**
+
+## Reglas de conteo (totales)
+
+- **Asistencia (`P`, `1`):** cuenta como asistencia.
+- **Falta justificada (`J`):** es una `A` con justificante; cuenta como asistencia (se exporta como `1` con una nota en la celda) y no cuenta como falta.
+- **Retardo (`R`, `2`):** cuenta como asistencia normal mientras el alumno tenga 1 o 2 retardos. Cada **3 retardos** de un alumno equivalen a **1 falta injustificada y 2 asistencias** (son 3 días: uno se convierte en falta).
+- **Total presente / total de asistencias de un alumno** (`totalAsistencias`): `P + justificadas + retardos − floor(retardos / 3)`. Ejemplos: 1 retardo = 1; 2 retardos = 2; 3 retardos = 2; 4 retardos = 3; 6 retardos = 4.
+- **Faltas equivalentes** de un alumno (`faltasEquivalentes`): `faltas injustificadas + floor(retardos / 3)`.
+- La regla es **por alumno a lo largo de varias fechas**; el resumen de un solo día (`resumenDia`) muestra conteos simples (presentes = `P` + justificadas, faltas sin justificar, retardos) y no aplica la conversión.
+- Las celdas del Excel guardan el valor original (`1`, `0`, `2`); la regla solo afecta a los **totales** (columna TOTAL del Excel, "Total presente" del Historial y "Copiar para pegar en Excel").
 
 ## Sincronización con Google Drive / Excel institucional
 
@@ -56,8 +63,7 @@ Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor
 - `guardarEnGoogleDrive` solo descarga el libro si no hay copia local (`plantillaExcel`) para no pisar ediciones locales; luego `crearBufferPlantillaInstitucional` escribe las marcas **solo del grupo activo** y se sube con PATCH.
 - Grupos nuevos: se clonan de la hoja "Plantilla" (`clonarHojaDesdePlantilla`); si no existe esa pestaña la creación falla con aviso.
 - Auto-sincronización: `autoSincronizarCambios` / `sincronizarPendientes` suben cuando hay internet y cambios pendientes.
-- Al sincronizar un grupo, `crearBufferPlantillaInstitucional` escribe los alumnos en orden alfabético desde la primera fila y **limpia las filas sobrantes** (hasta `headerRow + 32`) para que un alumno quitado no deje datos duplicados.
-- Funciones clave en `app.js`: `extraerGrupoDeHoja`, `encontrarEncabezadoAlumno`, `limiteColumnaAsistencias`, `eliminarFechaDeHoja`, `renombrarFechaEnHoja`, `compactarColumnasVacias`, `construirMatrizActiva`, `descargarXlsxCompleto`, `faltasEquivalentes` (3 retardos = 1 falta), `confirmar`, `pedirTexto`; escuelas: `cargarEscuelas`, `sufijoEscuela`, `mostrarSelectorEscuelas`; resultados: `resEsDeEscuela`.
+- Funciones clave en `app.js`: `extraerGrupoDeHoja`, `encontrarEncabezadoAlumno`, `limiteColumnaAsistencias`, `eliminarFechaDeHoja`, `renombrarFechaEnHoja`, `compactarColumnasVacias`, `construirMatrizActiva`, `descargarXlsxCompleto`, `faltasEquivalentes`, `totalAsistencias`, `resumenDia`.
 
 ## Estructura
 
@@ -66,7 +72,7 @@ Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor
 | `index.html`, `styles.css`, `app.js` | Aplicación (interfaz y lógica) |
 | `vendor/exceljs.min.js` | ExcelJS local (para funcionar sin internet) |
 | `fonts/` | Fuente Inter local (`inter-latin-wght-normal.woff2`) y su licencia `OFL.txt` |
-| `electron-main.cjs` | Ventana de escritorio (Windows) y servidor local |
+| `electron-main.cjs` | Ventana de escritorio (Windows) y servidor local interno |
 | `package.json` | Scripts (`start:windows`, `dist:windows`) y configuración de electron-builder |
 | `FS.png`, `FullStatus.png` | Icono de la app y logo de arranque |
 | `.github/agents/fullstatus-maintainer.agent.md` | Instrucciones del agente de mantenimiento de Copilot |
@@ -88,38 +94,20 @@ npm run dist:windows     # instalador de Windows (electron-builder)
 2. **Pasar lista:** una tarjeta por alumno (Asistencia / Falta). El segundo pase permite convertir faltas en retardos.
 3. **Historial y exportar:** consultar, justificar faltas, editar/eliminar fechas, copiar a Excel o actualizar el archivo en Drive.
 
-Reglas: 3 retardos = 1 falta equivalente. Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
+Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
 
 ## Historial de cambios
 
-_Horas en horario de Ciudad de México. Las de las entradas del 2026-10-10 posteriores a las 00:44 son aproximadas (tomadas del reloj de las capturas de pantalla de la sesión)._
-
-### 2026-10-10 01:55 a. m. — Filtro "Tipo de examen" por escuela
-
-- **Ahora:** en Resultados, el selector "Tipo de examen" solo lista los exámenes (`materias`) que tienen al menos un resultado en los grupos de la escuela seleccionada. Antes listaba todos los de Supabase. Misma limitación que el filtro por escuela: depende de que `grupo` coincida con el nombre de un grupo de la app.
-
-### 2026-10-10 01:52 a. m. — Resultados filtrados por escuela
-
-- **Nuevo:** la pestaña Resultados solo muestra los resultados cuyo `grupo` coincide con el nombre de algún grupo de la escuela seleccionada (`resEsDeEscuela`, comparación sin mayúsculas ni espacios extra). El selector de grupo de esa pestaña solo lista grupos de la escuela, y se indica cuántos resultados de otros grupos quedan ocultos.
-- **Limitación:** la tabla `resultados` de Supabase no tiene un campo de escuela; el filtro depende de que el nombre del grupo coincida con el de la app. Si dos escuelas tienen un grupo con el mismo nombre, sus resultados se mezclan. Solución robusta pendiente: agregar una columna `escuela` en Supabase y filtrar por ella.
-- Solo lectura; no cambia datos en Supabase ni claves de almacenamiento.
-
-### 2026-10-10 01:25 a. m. — Pantalla de inicio: elegir escuela
-
-- **Nuevo:** al abrir la app se muestra "¿En qué escuela vas a trabajar?" (`mostrarSelectorEscuelas`). Cada escuela tiene su propio estado, cambios pendientes, copia local del Excel y archivo de Drive. Se puede agregar (nombre + enlace/ID del Excel en Drive), renombrar y quitar escuelas. El botón con el nombre de la escuela en el encabezado vuelve a la pantalla de inicio.
-- **Claves:** lista de escuelas en `localStorage` `fullstatusEscuelas_v1` (`[{id, nombre, driveFileId, original?}]`); escuela elegida en la sesión en `sessionStorage` `fullstatusEscuelaSesion_v1`. La escuela `original` conserva las claves de siempre (`listaAsistenciaData_v2`, `listaAsistenciaCambiosPendientes_v1`, `listaAsistenciaDriveFileId_v1`, IndexedDB clave `institucional`) sin migración; las demás usan esas mismas claves con el sufijo `__<id>`.
-- Cambiar de escuela recarga la ventana (`location.reload()`), así todo el estado en memoria se reinicia limpio. `GOOGLE_SHEET_ID` ahora sale de la escuela elegida.
-- Pendiente de probar: Electron con dos escuelas y dos archivos de Drive distintos. Si cada escuela usa una cuenta de Google diferente, Google puede pedir elegir cuenta al sincronizar.
-
-> Formato: `AAAA-MM-DD hh:mm a. m./p. m. (hora de Ciudad de México)`. Las entradas anteriores al 2026-10-10 12:35 a. m. solo tienen fecha porque no se registró la hora.
-
-### 2026-10-10 12:35 a. m. — Falla: al quitar un alumno, el Excel lo dejaba duplicado
-- **Síntoma (hoja `12F`):** tras quitar un alumno en la app y sincronizar, el Excel mostraba dos filas idénticas (mismo nombre, número y marcas 2, 0, 0, 1) en las filas 16 y 17.
-- **Causa:** `crearBufferPlantillaInstitucional` escribe los alumnos que quedan en orden alfabético desde la fila 16. La fila final que ya no correspondía a nadie conservaba los datos del alumno anterior (por ejemplo, con dos alumnos A y B, al quitar A, B subía a la fila 16 y la fila 17 seguía con B).
-- **Arreglo (`app.js`):** después de escribir a los alumnos, se limpian las filas sobrantes desde `headerRow + 1 + cantidad de alumnos` hasta `headerRow + 32`: número (`No.`), nombre, marcas y notas de las columnas de fecha, y `Total`. Solo se borran valores; no se tocan estilos, anchos ni altos, ni `Grupo`, `No. EQUIPO` ni `EVALUACIÓN`, ni la hoja "Plantilla".
-- **Datos ya afectados:** la fila duplicada existente se limpia sola en la siguiente sincronización del grupo (`Actualizar en Google Drive`). Si la app no marca cambios pendientes, quitar y volver a agregar un alumno de prueba fuerza la subida, o se borra la fila a mano en Excel.
-- Probado solo leyendo el código y con la captura de la hoja; **pendiente probar en Electron** (quitar un alumno → Actualizar → revisar el Excel en Drive).
-- Documentación: el README ahora exige fecha y hora en cada entrada y entrega de archivos completos y comentados (reglas 1 y 10); se corrigió la nota desactualizada del `confirm()` en `importarArchivoExcel` (esa función ya no existe) y se quitó de pendientes el uso de `confirm()` nativo (ya resuelto).
+### 2026-11-04 14:49 — Totales: la falta justificada cuenta como asistencia y 3 retardos = 1 falta + 2 asistencias
+- **Regla nueva (`totalAsistencias`):** el total de asistencias de un alumno es `P + justificadas + retardos − floor(retardos / 3)`. Con 1 o 2 retardos siguen contando como asistencias normales; al completar el tercero, ese grupo de 3 días pasa a ser 1 falta injustificada y 2 asistencias. Antes los retardos no sumaban nada al total.
+- **Dónde se aplica:** columna TOTAL del Excel (`crearBufferPlantillaInstitucional`), "Total presente" del Historial (`renderHistorial`), "Copiar para pegar en Excel" (`construirMatrizActiva`) y la ruta de hojas de Google nativas (`actualizarHojaGoogle`).
+- **Resumen de "Pasar lista" (`resumenDia`, nuevo):** ahora "presentes" incluye las faltas justificadas, "faltas" cuenta solo las injustificadas y "retardos" es el conteo simple del día. Antes mostraba "faltas equivalentes" sumando retardos de alumnos distintos, lo cual no corresponde a la regla (que es por alumno en varias fechas). El botón "Segundo pase" sigue revisando todas las faltas del día, justificadas o no.
+- **`actualizarHojaGoogle`:** ahora exporta las faltas justificadas como `1` (igual que la ruta de Excel) y calcula el total con la regla nueva. Antes escribía `0` y no las contaba.
+- Textos de ayuda del Historial y de "Pasar lista" actualizados con la regla. Las celdas del Excel siguen guardando `1`, `0` y `2`; solo cambian los totales.
+- Además: `renderHistorial` y `construirMatrizActiva` leen `state.asistencias[g.id]` con protección (`|| {}`) por si un grupo tiene fechas sin marcas importadas pero no tiene entrada de asistencias.
+- Verificado en el código: `app.js` ya no contiene `confirm()` nativo ni `importarArchivoExcel` (se eliminaron de "Funciones clave" y de pendientes).
+- README: corregidos "3 pestañas" → 4 (Resultados), `server.cjs` quitado de la tabla de estructura y añadida la sección "Reglas de conteo (totales)".
+- **Pendiente de probar en Electron:** solo se escribió el código; no se ejecutó la app. Probar con un alumno con 1, 2, 3 y 4 retardos y con una falta justificada, y comparar la columna TOTAL en el Excel.
 
 ### 2026-10-10 — Falla: el campo "Motivo" del justificante no dejaba escribir
 - **Causa:** en Electron, tras cerrar un `confirm()` nativo la ventana pierde el foco del teclado y los campos de texto que se abren después no aceptan escritura. El justificante hacía `confirm()` y luego mostraba el cuadro del motivo.
@@ -212,23 +200,21 @@ _Horas en horario de Ciudad de México. Las de las entradas del 2026-10-10 poste
 
 ## Pendientes conocidos
 
-- Escuelas: falta un botón "Cambiar archivo de Drive" (editar el enlace sin perder grupos; hoy hay que quitar y volver a agregar la escuela, lo que borra sus datos locales) y una protección que impida borrar pestañas cuando el archivo no tiene `Plantilla`.
-- Resultados por escuela: se filtra por nombre de grupo; falta una columna `escuela` en Supabase para no depender de que los nombres coincidan ni de que no se repitan entre escuelas.
-
-- Escuelas: no hay edición del enlace de Drive de una escuela ya creada (hoy: quitar y volver a agregar, o editar `fullstatusEscuelas_v1`). El selector aparece en cada inicio de la app.
-
-- Probar en Electron la limpieza de filas sobrantes al quitar alumnos (2026-10-10 12:35 a. m.): quitar un alumno, sincronizar y revisar el Excel en Drive.
-- Unidades: no hay edición (solo agregar/quitar), ni totales de asistencia por unidad en la tabla, ni se importan/exportan al Excel institucional; tampoco se muestra la unidad en "Pasar lista". Probar en Electron (probado solo con `node --check`).
+- Probar en Electron la regla de totales (1, 2, 3 y 4 retardos, faltas justificadas) y revisar la columna TOTAL del Excel real.
+- Si la columna TOTAL de la hoja institucional contiene una fórmula propia, `crearBufferPlantillaInstitucional` la sustituye por el valor calculado (comportamiento previo); confirmar que es lo deseado.
+- Unidades: no hay edición (solo agregar/quitar), ni totales de asistencia por unidad en la tabla, ni se importan/exportan al Excel institucional; tampoco se muestra la unidad en "Pasar lista". Probar en Electron.
+- Alumnos quitados de un grupo dejan filas viejas en el Excel.
 - La sincronización solo escribe el grupo activo (decisión deliberada, pero hay que avisar al usuario).
 - Cargar desde Drive no avisa si hay cambios locales sin subir.
-- La limpieza de filas sobrantes solo aplica a la ruta de Excel (`.xlsx`); la ruta de hojas de Google nativas (`actualizarHojaGoogle`) no la tiene.
+- `actualizarHojaGoogle` (hojas de Google nativas) usa `Object.keys(state.asistencias[...])` en vez de `fechasDelGrupo` y `cargarGruposGoogle` no reinicia `fechasVacias`; el archivo real es `.xlsx`, así que casi no se ejecuta.
+- Las notas de justificantes (`cell.note`) no se mueven al compactar o eliminar columnas; se regeneran en la siguiente sincronización.
+- `electron-main.cjs`: `decodeURIComponent` sin `try/catch` y puerto 5173 fijo (si está ocupado, la app no carga y Google exige ese origen).
+- `GOOGLE_SHEET_ID` fijo: `driveFileId` se guarda pero las funciones usan siempre la constante.
 - [index.html](index.html): comentario "CORREGIDO" de 17 líneas sobre Google Identity Services; reducirlo a una línea.
 - Dependencias: Electron fijado en `^37` (última 44).
-- Hacer commit de los cambios sin confirmar (`app.js`, `README.md`, `package.json`, archivos eliminados).
+- Hacer commit de los cambios sin confirmar.
 
 ## Fallas y riesgos conocidos
-
-- **Excel de una escuela sin pestaña `Plantilla`:** al sincronizar, la app no puede crear la hoja de un grupo nuevo (avisa) y además elimina del archivo las pestañas de grupos quitados en la app (p. ej. una `Sheet1` vacía cargada como grupo). Si era la única pestaña, el archivo podría quedar sin hojas. Cada escuela debe usar una copia del Excel institucional con su `Plantilla`.
 
 - `npm run dist:windows` se verificó el 2026-10-08 (genera `dist/FullStatus Setup 1.0.0.exe`); tras retirar Android y Capacitor el 2026-10-09 aún no se ha vuelto a compilar.
 - No hay pruebas automatizadas (`npm test` ya no existe).
@@ -236,4 +222,4 @@ _Horas en horario de Ciudad de México. Las de las entradas del 2026-10-10 poste
 
 ## Mantenimiento de este README
 
-Este documento es la fuente de verdad para personas e IAs. Cada cambio (código, archivos, scripts, configuración) debe reflejarse aquí en la misma sesión: añadir entrada al historial **con fecha y hora**, actualizar estructura/arquitectura si cambió, y mover pendientes y fallas según corresponda.
+Este documento es la fuente de verdad para personas e IAs. Cada cambio (código, archivos, scripts, configuración) debe reflejarse aquí en la misma sesión: añadir entrada al historial (con fecha y hora), actualizar estructura/arquitectura si cambió, y mover pendientes y fallas según corresponda.
