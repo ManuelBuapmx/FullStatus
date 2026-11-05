@@ -2167,6 +2167,17 @@
         datos.alumnos[id][inp.getAttribute("data-calif")] = inp.value;
         guardarCalificaciones(); refrescarTotalesCalif();
       });
+      // Flechas arriba/abajo: pasa a la misma columna de la fila de arriba o de abajo.
+      inp.addEventListener("keydown", function(ev){
+        if(ev.key !== "ArrowUp" && ev.key !== "ArrowDown") return;
+        var fila = inp.closest("tr");
+        var vecina = fila && (ev.key === "ArrowUp" ? fila.previousElementSibling : fila.nextElementSibling);
+        var destino = vecina && vecina.querySelector('[data-calif="' + inp.getAttribute("data-calif") + '"]');
+        if(!destino) return;
+        ev.preventDefault();
+        destino.focus();
+        destino.select();
+      });
     });
     var selModeloCalif = document.getElementById("selModeloCalif");
     if(selModeloCalif) selModeloCalif.addEventListener("change", function(){
