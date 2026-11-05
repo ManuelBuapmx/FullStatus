@@ -3,15 +3,16 @@
 
    supabase-calificaciones.js  (FullStatus)
 
-   Publica en Supabase las calificaciones por unidad de cada alumno (1-10), con el
-   modelo del grupo y si aprueba: modelo nuevo reprueba con menos de 7; modelo
-   anterior, con menos de 8. La regla vive en app.js (FullStatusCalifExport).
+   Publica en Supabase las calificaciones por unidad de cada alumno (1-10), ligadas a su
+   matrícula (tabla calificaciones_unidad, la que lee la app FullStatus Student). Cada grupo
+   lleva el mínimo para aprobar según su modelo: nuevo = 7 (reprueba con menos de 7) y
+   anterior = 8. La regla vive en app.js (CALIF_MINIMA / FullStatusCalifExport).
 
    - Reutiliza la sesión de supabase-asistencias.js (window.FullStatusSupabase.rpc):
      cargar ESE script antes que este, ambos después de app.js.
    - Offline primero: sin internet o sin sesión no pasa nada; se reintenta al volver
      la conexión o en el siguiente cambio. La fuente de verdad sigue siendo localStorage.
-   - Escribe solo con la función RPC `publicar_calificaciones` (ver supabase_calificaciones.sql).
+   - Escribe solo con la función RPC `publicar_calificaciones` (ya existe en Supabase; agrega minimo y pts_extra).
    ============================================================================ */
 (function () {
   'use strict';
@@ -36,9 +37,8 @@
     if (subiendo) { pendiente = true; return; }
     if (!navigator.onLine) return; // el evento "online" vuelve a programar
 
-    let grupos;
-    try { grupos = window.FullStatusCalifExport(); } catch (e) { console.warn('[supabase-calificaciones]', e); return; }
-    const payload = { grupos: grupos };
+    let payload;
+    try { payload = window.FullStatusCalifExport(); } catch (e) { console.warn('[supabase-calificaciones]', e); return; }
     const texto = JSON.stringify(payload);
     if (!manual && texto === ultimoEnviado) return;
 
@@ -48,8 +48,11 @@
       if (datos && datos.sinSesion) return; // sin sesión: se publicará al iniciar sesión
       ultimoEnviado = texto;
       window.FullStatusCalifEstado = datos;
-      if (datos && datos.sin_matricula && datos.sin_matricula.length) {
-        console.warn('[supabase-calificaciones] Sin matrícula en Supabase:', datos.sin_matricula.join(', '));
+      if (datos && datos.sin_match && datos.sin_match.length) {
+        console.warn('[supabase-calificaciones] Sin matrícula en Supabase:', datos.sin_match.join(', '));
+      }
+      if (datos && datos.ambiguos && datos.ambiguos.length) {
+        console.warn('[supabase-calificaciones] Nombre repetido en "alumnos":', datos.ambiguos.join(', '));
       }
     } catch (e) {
       if (!(e instanceof TypeError)) console.warn('[supabase-calificaciones] No se pudo publicar:', e.message || e);

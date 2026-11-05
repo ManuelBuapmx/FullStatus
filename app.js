@@ -1908,26 +1908,39 @@
       });
       var ptsAsist = dias ? Math.min(asist / dias, 1) * puntos.asist : 0;
       var total = Math.max(0, Math.min(10, pts.trab + pts.partic + pts.examen + ptsAsist + numExtra(d.extra)));
-      return {estudiante:e, asist:asist, total:Math.round(total * 100) / 100};
+      return {estudiante:e, asist:asist, total:Math.round(total * 100) / 100, pts:{asist:ptsAsist, trab:pts.trab, partic:pts.partic, examen:pts.examen}};
     });
     return {unidad:unidad, modeloId:modeloId, modelo:modelo, puntos:puntos, datos:datos, dias:dias, cfg:cfg, escala:escala, cuenta:cuenta, filas:filas};
   }
   // Calificación mínima para aprobar según el modelo del grupo: con menos de esto está reprobado.
   var CALIF_MINIMA = {nuevo:7, anterior:8};
-  // Solo lectura: la usa supabase-calificaciones.js para publicar el total de cada alumno por unidad.
+  // Solo lectura: la usa supabase-calificaciones.js. Devuelve lo que espera la función RPC
+  // publicar_calificaciones de Supabase: por grupo, cada alumno con sus unidades y los puntos
+  // de cada componente (asistencias, actividades, participaciones, examen) más el extra.
+  // "examen" va en null mientras no se capture, para que el alumno vea la unidad como incompleta.
   window.FullStatusCalifExport = function(){
-    return state.grupos.map(function(g){
-      var modeloId = modeloCalifId(g);
-      return {
-        id: String(g.id), nombre: g.nombre || "", materia: g.materia || "", modelo: modeloId, minima: CALIF_MINIMA[modeloId],
-        unidades: unidadesDelGrupo(g).map(function(u, i){
-          var r = calcularCalificaciones(g, u);
-          return {num: i + 1, nombre: u.nombre || "", alumnos: r.filas.map(function(f){
-            return {nombre: f.estudiante.nombre, total: f.total, asistencias: f.asist, dias: r.dias};
-          })};
-        })
-      };
-    });
+    function r2(n){ return Math.round(n * 100) / 100; }
+    function vacio(v){ return v == null || String(v).trim() === ""; }
+    return {grupos: state.grupos.map(function(g){
+      var alumnos = g.estudiantes.map(function(e){ return {nombre:e.nombre, unidades:[]}; });
+      unidadesDelGrupo(g).forEach(function(u){
+        var r = calcularCalificaciones(g, u);
+        r.filas.forEach(function(f, i){
+          var d = r.datos.alumnos[f.estudiante.id] || {};
+          var enEscala = function(campo){ return r.cfg[campo].modo === "escala"; };
+          alumnos[i].unidades.push({
+            nombre: u.nombre || "",
+            asistencias: r2(f.pts.asist), actividades: r2(f.pts.trab), participaciones: r2(f.pts.partic),
+            examen: vacio(d.examen) ? null : r2(f.pts.examen),
+            extra: r2(numExtra(d.extra)),
+            n_actividades: enEscala("trab") ? r2(valorColumna("trab", "escala", d.trab)) : null,
+            total_actividades: enEscala("trab") ? r2(r.escala.trab.efectiva) : null,
+            n_participaciones: enEscala("partic") ? r2(valorColumna("partic", "escala", d.partic)) : null
+          });
+        });
+      });
+      return {id: String(g.id), nombre: g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[modeloCalifId(g)], alumnos: alumnos};
+    })};
   };
   function refrescarTotalesCalif(){
     var g = grupoActivo(); if(!g) return;
