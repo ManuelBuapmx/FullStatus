@@ -1967,7 +1967,7 @@
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
     var unidades = unidadesDelGrupo(g);
     var unidad = unidadCalifActual(g);
-    var html = '<div class="card">';
+    var html = '<div class="card compacta">';
     html += '<div class="hist-head"><div><div class="eyebrow">Calificaciones</div><h2>'+esc(g.nombre)+'</h2></div>';
     html += '<div class="field hist-group-field"><label for="selGrupoCalif">Grupo</label><select id="selGrupoCalif">';
     state.grupos.forEach(function(grupo){
@@ -1989,7 +1989,8 @@
       html += '<option value="'+id+'" '+(id===r.modeloId?"selected":"")+'>'+CALIF_MODELOS[id].nombre+'</option>';
     });
     html += '</select></div>';
-    html += '<button class="btn" id="btnPdfCalif">Generar PDF</button>';
+    html += '<button class="btn" id="btnPublicarCalif" title="Publica las calificaciones de este grupo en Supabase (app del alumno)">☁ Publicar calificaciones</button>';
+    html += '<button class="btn secondary" id="btnPdfCalif">Generar PDF</button>';
     html += '<button class="btn secondary" id="btnCopiarCalif">Copiar para pegar en Excel</button>';
     html += '</div>';
     html += '<div class="hist-legend">';
@@ -2001,19 +2002,19 @@
     html += '</div>';
 
     // Cuadro aparte: cuántas asistencias, participaciones y trabajos hubo en el periodo.
-    html += '<div class="card"><h2>Resumen del periodo</h2><div class="hist-summary">';
+    html += '<div class="card compacta"><h2>Resumen del periodo</h2><div class="hist-summary">';
     html += '<div><strong id="califResAsist">'+r.dias+'</strong><span> asistencias (días de clase)</span></div>';
     html += '<div><strong id="califResPartic">'+r.cuenta.partic+'</strong><span> participaciones</span></div>';
     html += '<div><strong id="califResTrab">'+r.cuenta.trab+'</strong><span> trabajos en clase</span></div>';
     html += '</div></div>';
 
     // Cómo se captura cada columna.
-    html += '<div class="card"><h2>Cómo capturas cada columna</h2>';
+    html += '<div class="card compacta"><h2>Cómo capturas cada columna</h2>';
     html += '<p class="helptext" style="margin-top:0;">Elige si escribes porcentaje (0-100), calificación (0-10) o escala. En escala puedes poner el máximo o dejarlo vacío para que se calcule solo a partir del valor más alto capturado (en participación, con tope de 10).</p>';
     html += '<div class="row" style="align-items:flex-end;">';
     CALIF_COLUMNAS.forEach(function(col){
       var c = r.cfg[col.campo];
-      html += '<div class="field" style="margin-bottom:0;min-width:200px;"><label for="modo_'+col.campo+'">'+col.titulo+' ('+r.puntos[col.campo]+' pts)</label><select id="modo_'+col.campo+'" data-calif-modo="'+col.campo+'">';
+      html += '<div class="field" style="margin-bottom:0;min-width:170px;"><label for="modo_'+col.campo+'">'+col.titulo+' ('+r.puntos[col.campo]+' pts)</label><select id="modo_'+col.campo+'" data-calif-modo="'+col.campo+'">';
       Object.keys(CALIF_MODOS).forEach(function(modo){
         html += '<option value="'+modo+'" '+(modo===c.modo?"selected":"")+'>'+CALIF_MODOS[modo]+'</option>';
       });
@@ -2024,7 +2025,7 @@
     });
     html += '</div></div>';
 
-    html += '<div class="card">';
+    html += '<div class="card compacta">';
     if(g.estudiantes.length === 0){
       return html + '<p class="empty">Este grupo no tiene estudiantes todavía.</p></div>';
     }
@@ -2032,7 +2033,7 @@
     var th = function(texto, color, nota){
       return '<th style="background:'+color+';">'+texto+(nota ? '<small class="unidad-etiqueta">'+nota+'</small>' : '')+'</th>';
     };
-    html += '<div class="table-scroll"><table class="matriz"><thead><tr>';
+    html += '<div class="table-scroll"><table class="matriz calif"><thead><tr>';
     html += th("Nombre", CALIF_COLORES.nombre);
     html += th("Asistencias ("+r.puntos.asist+" pto)", CALIF_COLORES.asist, "automático");
     html += th("Exámen ("+r.puntos.examen+" pts)", CALIF_COLORES.examen, modoCorto[r.cfg.examen.modo]);
@@ -2046,7 +2047,7 @@
       html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+'</td>';
       html += '<td>'+f.asist+' / '+r.dias+'</td>';
       ["examen","partic","extra","trab"].forEach(function(campo){
-        html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" style="width:70px;min-height:34px;padding:4px;text-align:center;"></td>';
+        html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" class="calif-input"></td>';
       });
       html += '<td data-calif-total="'+esc(e.id)+'"><b>'+f.total+'</b></td></tr>';
     });
@@ -2067,15 +2068,20 @@
     var chip = function(color, texto){ return '<span class="chip" style="background:'+color+';">'+texto+'</span>'; };
     var hoy = new Date();
     var html = '<!doctype html><html lang="es-MX"><head><meta charset="utf-8"><title>Calificaciones</title><style>';
-    html += '@page{size:letter landscape;margin:12mm;}';
+    // Tamaño según el número de alumnos: con pocos se ve cómodo y con más se encoge para seguir
+    // cabiendo en UNA hoja carta horizontal; con muchísimos continúa en la siguiente (encabezado repetido).
+    var n = r.filas.length;
+    var fs = n <= 20 ? 11 : (n <= 30 ? 10 : (n <= 38 ? 9 : (n <= 46 ? 8 : 7)));
+    var pad = n <= 20 ? 4 : (n <= 30 ? 3 : (n <= 38 ? 2 : 1));
+    html += '@page{size:letter landscape;margin:10mm;}';
     html += '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
-    html += 'body{font-family:"Segoe UI",Arial,sans-serif;font-size:11px;color:#0f172a;margin:0;}';
-    html += 'h1{font-size:20px;margin:0 0 2px;}.sub{color:#475569;margin-bottom:8px;}';
-    html += '.chips{margin:8px 0;}.chip{display:inline-block;padding:3px 10px;border-radius:12px;margin-right:8px;font-size:10.5px;}';
-    html += '.resumen{margin:8px 0 10px;}.resumen span{display:inline-block;border:1px solid #94a3b8;border-radius:6px;padding:4px 10px;margin-right:8px;}';
+    html += 'body{font-family:"Segoe UI",Arial,sans-serif;font-size:'+fs+'px;color:#0f172a;margin:0;}';
+    html += 'h1{font-size:17px;margin:0 0 1px;}.sub{color:#475569;margin-bottom:4px;font-size:'+Math.min(fs,10)+'px;}';
+    html += '.chips{margin:4px 0;white-space:nowrap;}.chip{display:inline-block;padding:2px 8px;border-radius:12px;margin-right:6px;font-size:9.5px;}';
+    html += '.resumen{margin:4px 0 6px;}.resumen span{display:inline-block;border:1px solid #94a3b8;border-radius:6px;padding:2px 8px;margin-right:6px;}';
     html += 'table{border-collapse:collapse;width:100%;}thead{display:table-header-group;}tr{page-break-inside:avoid;}';
-    html += 'th,td{border:1px solid #64748b;padding:4px 6px;text-align:center;}th{font-size:10.5px;}th small{display:block;font-weight:normal;font-size:9px;color:#334155;}';
-    html += 'td.n{text-align:left;}.pie{margin-top:10px;color:#64748b;font-size:9px;}';
+    html += 'th,td{border:1px solid #64748b;padding:'+pad+'px 6px;text-align:center;}th{font-size:'+Math.min(fs,10)+'px;}th small{display:block;font-weight:normal;font-size:8px;color:#334155;}';
+    html += 'td.n{text-align:left;}.pie{margin-top:6px;color:#64748b;font-size:8px;}';
     html += '</style></head><body>';
     html += '<h1>Calificaciones — '+esc(g.nombre)+'</h1>';
     html += '<div class="sub">'+esc(u.nombre)+' ('+displayFecha(u.desde)+' - '+displayFecha(u.hasta)+')'+(g.materia ? ' · Materia: '+esc(g.materia) : '')+(g.profesor ? ' · Profesor: '+esc(g.profesor) : '')+' · '+esc(r.modelo.nombre)+'</div>';
@@ -2190,6 +2196,23 @@
     });
     var btnPdfCalif = document.getElementById("btnPdfCalif");
     if(btnPdfCalif) btnPdfCalif.addEventListener("click", generarPdfCalificaciones);
+    var btnPublicarCalif = document.getElementById("btnPublicarCalif");
+    if(btnPublicarCalif) btnPublicarCalif.addEventListener("click", async function(){
+      var api = window.FullStatusCalificacionesSupabase;
+      if(!api){ showToast("Falta cargar supabase-calificaciones.js."); return; }
+      var g = grupoActivo();
+      btnPublicarCalif.disabled = true;
+      var res = await api.subirAhora();
+      btnPublicarCalif.disabled = false;
+      if(res.estado === "ok"){
+        var sin = (res.datos && res.datos.sin_match) || [];
+        showToast("Calificaciones de " + (g ? g.nombre : "el grupo") + " publicadas." + (sin.length ? " Sin matrícula en Supabase: " + sin.join(", ") + "." : ""));
+      }
+      else if(res.estado === "sinSesion"){ showToast("Inicia sesión para publicar."); if(window.FullStatusSupabase && window.FullStatusSupabase.abrir) window.FullStatusSupabase.abrir(); }
+      else if(res.estado === "sinConexion") showToast("Sin conexión: se publicará solo al volver internet.");
+      else if(res.estado === "sinGrupo") showToast("No hay un grupo a la vista.");
+      else if(res.estado !== "ocupado") showToast(res.error || "No se pudo publicar.");
+    });
     var btnCopiarCalif = document.getElementById("btnCopiarCalif");
     if(btnCopiarCalif) btnCopiarCalif.addEventListener("click", function(){
       var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;

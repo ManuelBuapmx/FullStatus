@@ -431,6 +431,8 @@
   // Por si quieres dispararlo desde la consola o desde app.js más adelante.
   window.FullStatusSupabase = {
     subirAhora: function () { return subir(true); },
+    haySesion: function () { return !!sesion || haySesionGuardada(); },
+    abrir: function () { abrirModal(); },
     // Llama una función RPC con la sesión de admin (la usa supabase-calificaciones.js).
     // Devuelve { sinSesion: true } si no hay sesión; lanza error si Supabase la rechaza.
     rpc: async function (nombre, cuerpo) {

@@ -33,20 +33,20 @@
 
   async function subir(manual) {
     const api = window.FullStatusSupabase;
-    if (!api || !api.rpc || typeof window.FullStatusCalifExport !== 'function') return;
-    if (subiendo) { pendiente = true; return; }
-    if (!navigator.onLine) return; // el evento "online" vuelve a programar
+    if (!api || !api.rpc || typeof window.FullStatusCalifExport !== 'function') return { estado: 'error', error: 'Falta cargar supabase-asistencias.js antes que este script.' };
+    if (subiendo) { pendiente = true; return { estado: 'ocupado' }; }
+    if (!navigator.onLine) return { estado: 'sinConexion' }; // el evento "online" vuelve a programar
 
     let payload;
-    try { payload = window.FullStatusCalifExport(); } catch (e) { console.warn('[supabase-calificaciones]', e); return; }
-    if (!payload.grupos.length) return; // sin grupo a la vista no hay nada que publicar
+    try { payload = window.FullStatusCalifExport(); } catch (e) { console.warn('[supabase-calificaciones]', e); return { estado: 'error', error: String(e.message || e) }; }
+    if (!payload.grupos.length) return { estado: 'sinGrupo' }; // sin grupo a la vista no hay nada que publicar
     const texto = JSON.stringify(payload);
-    if (!manual && texto === ultimoEnviado) return;
+    if (!manual && texto === ultimoEnviado) return { estado: 'sinCambios' };
 
     subiendo = true;
     try {
       const datos = await api.rpc('publicar_calificaciones', { p_payload: payload });
-      if (datos && datos.sinSesion) return; // sin sesión: se publicará al iniciar sesión
+      if (datos && datos.sinSesion) return { estado: 'sinSesion' }; // se publicará al iniciar sesión
       ultimoEnviado = texto;
       window.FullStatusCalifEstado = datos;
       if (datos && datos.sin_match && datos.sin_match.length) {
@@ -55,8 +55,11 @@
       if (datos && datos.ambiguos && datos.ambiguos.length) {
         console.warn('[supabase-calificaciones] Nombre repetido en "alumnos":', datos.ambiguos.join(', '));
       }
+      return { estado: 'ok', datos: datos };
     } catch (e) {
-      if (!(e instanceof TypeError)) console.warn('[supabase-calificaciones] No se pudo publicar:', e.message || e);
+      if (e instanceof TypeError) return { estado: 'sinConexion' };
+      console.warn('[supabase-calificaciones] No se pudo publicar:', e.message || e);
+      return { estado: 'error', error: e.message || String(e) };
     } finally {
       subiendo = false;
       if (pendiente) { pendiente = false; programar(); }

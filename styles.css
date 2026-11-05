@@ -225,3 +225,19 @@ ul.escuelas li:last-child{border-bottom:none;}
 ul.escuelas .escuela-entrar{flex:1 1 220px;text-align:left;font-weight:600;}
 .btn-escuela{background:transparent;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:var(--radius);padding:6px 12px;font-size:.8rem;cursor:pointer;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .btn-escuela:hover{border-color:var(--brand-accent);}
+
+/* --- Calificaciones: vista compacta para ver más alumnos de un vistazo --- */
+.card.compacta{padding:10px 14px;margin-bottom:10px;}
+.card.compacta h2{font-size:.95rem;margin:0 0 8px;}
+.card.compacta .hist-head{margin-bottom:10px;}
+.card.compacta .hist-summary{margin-bottom:0;}
+.card.compacta .hist-summary div{padding:6px 10px;font-size:.75rem;}
+.card.compacta .hist-summary strong{font-size:1rem;}
+.card.compacta .hist-legend{font-size:.74rem;margin-bottom:6px;}
+.card.compacta .helptext{font-size:.76rem;margin-top:4px;}
+table.matriz.calif{font-size:.78rem;}
+table.matriz.calif th,table.matriz.calif td{padding:3px 6px;}
+table.matriz.calif th{font-size:.74rem;}
+table.matriz.calif th small{display:block;font-weight:400;font-size:.62rem;}
+table.matriz.calif th:first-child,table.matriz.calif td:first-child{width:190px;max-width:190px;}
+table.matriz.calif input.calif-input{width:52px;min-height:24px;padding:1px 4px;font-size:.78rem;text-align:center;}
