@@ -1921,7 +1921,9 @@
   window.FullStatusCalifExport = function(){
     function r2(n){ return Math.round(n * 100) / 100; }
     function vacio(v){ return v == null || String(v).trim() === ""; }
-    return {grupos: state.grupos.map(function(g){
+    // Solo el grupo que está a la vista: los demás grupos no se tocan en Supabase.
+    var visible = grupoActivo();
+    return {grupos: (visible ? [visible] : []).map(function(g){
       var alumnos = g.estudiantes.map(function(e){ return {nombre:e.nombre, unidades:[]}; });
       unidadesDelGrupo(g).forEach(function(u){
         var r = calcularCalificaciones(g, u);

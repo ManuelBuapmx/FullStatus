@@ -39,6 +39,7 @@
 
     let payload;
     try { payload = window.FullStatusCalifExport(); } catch (e) { console.warn('[supabase-calificaciones]', e); return; }
+    if (!payload.grupos.length) return; // sin grupo a la vista no hay nada que publicar
     const texto = JSON.stringify(payload);
     if (!manual && texto === ultimoEnviado) return;
 
