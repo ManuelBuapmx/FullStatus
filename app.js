@@ -1912,6 +1912,23 @@
     });
     return {unidad:unidad, modeloId:modeloId, modelo:modelo, puntos:puntos, datos:datos, dias:dias, cfg:cfg, escala:escala, cuenta:cuenta, filas:filas};
   }
+  // Calificación mínima para aprobar según el modelo del grupo: con menos de esto está reprobado.
+  var CALIF_MINIMA = {nuevo:7, anterior:8};
+  // Solo lectura: la usa supabase-calificaciones.js para publicar el total de cada alumno por unidad.
+  window.FullStatusCalifExport = function(){
+    return state.grupos.map(function(g){
+      var modeloId = modeloCalifId(g);
+      return {
+        id: String(g.id), nombre: g.nombre || "", materia: g.materia || "", modelo: modeloId, minima: CALIF_MINIMA[modeloId],
+        unidades: unidadesDelGrupo(g).map(function(u, i){
+          var r = calcularCalificaciones(g, u);
+          return {num: i + 1, nombre: u.nombre || "", alumnos: r.filas.map(function(f){
+            return {nombre: f.estudiante.nombre, total: f.total, asistencias: f.asist, dias: r.dias};
+          })};
+        })
+      };
+    });
+  };
   function refrescarTotalesCalif(){
     var g = grupoActivo(); if(!g) return;
     var u = unidadCalifActual(g); if(!u) return;

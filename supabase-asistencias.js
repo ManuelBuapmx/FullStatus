@@ -429,5 +429,21 @@
   else iniciar();
 
   // Por si quieres dispararlo desde la consola o desde app.js más adelante.
-  window.FullStatusSupabase = { subirAhora: function () { return subir(true); } };
+  window.FullStatusSupabase = {
+    subirAhora: function () { return subir(true); },
+    // Llama una función RPC con la sesión de admin (la usa supabase-calificaciones.js).
+    // Devuelve { sinSesion: true } si no hay sesión; lanza error si Supabase la rechaza.
+    rpc: async function (nombre, cuerpo) {
+      const token = await obtenerToken();
+      if (!token) return { sinSesion: true };
+      const resp = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + nombre, {
+        method: 'POST',
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify(cuerpo)
+      });
+      const datos = await resp.json().catch(function () { return {}; });
+      if (!resp.ok) throw new Error(datos.message || 'Error en ' + nombre + ' (' + resp.status + ')');
+      return datos;
+    }
+  };
 })();

@@ -24,6 +24,8 @@
       "index.html",
       "styles.css",
       "app.js",
+      "supabase-asistencias.js",
+      "supabase-calificaciones.js",
       "FullStatus.png",
       "FS.png",
       "package.json",
