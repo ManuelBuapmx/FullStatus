@@ -285,6 +285,7 @@
     state.grupos.forEach(ordenarEstudiantes);
     if(currentTab === "grupos") panel.innerHTML = renderGrupos();
     else if(currentTab === "pasar") panel.innerHTML = renderPasar();
+    else if(currentTab === "calificaciones") panel.innerHTML = renderCalificaciones();
     else if(currentTab === "resultados") panel.innerHTML = renderResultados();
     else panel.innerHTML = renderHistorial();
     attachHandlers();
@@ -1782,9 +1783,382 @@
   }
 
   // =========================================================
+  // CALIFICACIONES (por grupo y unidad; datos en su propia clave de localStorage)
+  // =========================================================
+  // Ponderación según el modelo del grupo (ver CALIF_MODELOS): trabajos en clase (saber hacer),
+  // examen (saber) y asistencias + participación (ser). El extra suma o resta puntos directos.
+  // TOTAL = suma de puntos, con mínimo 0 y tope 10. Las asistencias se calculan solas
+  // desde el historial; el resto se captura a mano. Cada columna (examen, participación,
+  // trabajos) puede capturarse como porcentaje, calificación (0-10) o escala con máximo
+  // (manual o automático = valor más alto capturado).
+  var CALIF_KEY = "listaAsistenciaCalificaciones_v1";
+  // Dos modelos de ponderación (puntos sobre 10):
+  //  - anterior (10° grado, último cuatrimestre): trabajos 60, examen 20, participación 10, asistencias 10.
+  //  - nuevo (grados anteriores, el que quedará): trabajos 50, examen 30, participación 10, asistencias 10.
+  var CALIF_MODELOS = {
+    nuevo:    {nombre:"Modelo nuevo (50 / 30 / 10 / 10)",    puntos:{trab:5, examen:3, asist:1, partic:1}, pesos:{hacer:50, saber:30, ser:20}},
+    anterior: {nombre:"Modelo anterior (60 / 20 / 10 / 10)", puntos:{trab:6, examen:2, asist:1, partic:1}, pesos:{hacer:60, saber:20, ser:20}}
+  };
+  var CALIF_COLORES = {nombre:"#ddebf7", asist:"#fce4d6", examen:"#e2efda", partic:"#fce4d6", extra:"#fce4d6", trab:"#ffc000", total:"#ddebf7"};
+  var CALIF_MODOS = {porcentaje:"Porcentaje (0-100)", calificacion:"Calificación (0-10)", escala:"Escala (con máximo)"};
+  var CALIF_COLUMNAS = [
+    {campo:"examen", titulo:"Exámen"},
+    {campo:"partic", titulo:"Partic."},
+    {campo:"trab", titulo:"Trabajos en clase"}
+  ];
+  var califDatos = cargarCalificaciones();
+  var calUnidad = "";
+
+  function cargarCalificaciones(){
+    try{
+      var raw = localStorage.getItem(CALIF_KEY);
+      var parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    }catch(e){ return {}; }
+  }
+  function guardarCalificaciones(){
+    try{ localStorage.setItem(CALIF_KEY, JSON.stringify(califDatos)); }
+    catch(e){ showToast("No se pudieron guardar las calificaciones en este equipo."); }
+  }
+  function numCalif(v){
+    var n = parseFloat(String(v == null ? "" : v).replace(",", "."));
+    return isFinite(n) && n >= 0 ? n : 0;
+  }
+  // El extra puede ser positivo o negativo (puntos de más o de menos).
+  function numExtra(v){
+    var n = parseFloat(String(v == null ? "" : v).replace(",", "."));
+    return isFinite(n) ? n : 0;
+  }
+  // El modelo se guarda por grupo (califDatos[grupoId]._modelo). Si no se ha elegido,
+  // los grupos de 10° (nombre que empieza con "10") usan el modelo anterior; el resto, el nuevo.
+  function modeloCalifId(g){
+    var guardado = califDatos[g.id] && califDatos[g.id]._modelo;
+    if(guardado && CALIF_MODELOS[guardado]) return guardado;
+    return /^\s*10(?!\d)/.test(g.nombre) ? "anterior" : "nuevo";
+  }
+  // Solo se muestran unidades: si no hay una elegida, se usa la que contiene el día de hoy o la primera.
+  function unidadCalifActual(g){
+    var unidades = unidadesDelGrupo(g);
+    if(!unidades.length){ calUnidad = ""; return null; }
+    var actual = unidades.find(function(u){ return u.id === calUnidad; });
+    if(!actual){
+      var hoy = todayISO();
+      actual = unidades.find(function(u){ return hoy >= u.desde && hoy <= u.hasta; }) || unidades[0];
+      calUnidad = actual.id;
+    }
+    return actual;
+  }
+  function califBucket(grupoId, unidadId){
+    if(!califDatos[grupoId]) califDatos[grupoId] = {};
+    var b = califDatos[grupoId][unidadId];
+    if(!b) b = califDatos[grupoId][unidadId] = {cols:{}, alumnos:{}};
+    if(!b.cols) b.cols = {};
+    if(!b.alumnos) b.alumnos = {};
+    // Compatibilidad con la versión anterior (un solo "máx. trabajos").
+    if(b.maxTrab && !b.cols.trab){ b.cols.trab = {modo:"escala", max:b.maxTrab}; }
+    delete b.maxTrab;
+    return b;
+  }
+  function configColumna(datos, campo){
+    var c = datos.cols[campo] || {};
+    return {modo: c.modo || (campo === "examen" ? "calificacion" : "escala"), max: c.max == null ? "" : c.max};
+  }
+  // La participación en escala nunca pasa de 10.
+  function valorColumna(campo, modo, valor){
+    var v = numCalif(valor);
+    return (campo === "partic" && modo === "escala") ? Math.min(v, 10) : v;
+  }
+  function fraccionCalif(modo, valor, maxEscala){
+    var f;
+    if(modo === "porcentaje") f = valor / 100;
+    else if(modo === "calificacion") f = valor / 10;
+    else f = maxEscala > 0 ? valor / maxEscala : 0;
+    return Math.max(0, Math.min(1, f));
+  }
+  function calcularCalificaciones(g, unidad){
+    var datos = califBucket(g.id, unidad.id);
+    var modeloId = modeloCalifId(g), modelo = CALIF_MODELOS[modeloId], puntos = modelo.puntos;
+    var fechas = fechasDelGrupo(g.id).filter(function(f){ return f >= unidad.desde && f <= unidad.hasta; });
+    var dias = fechas.length;
+    var cfg = {}, escala = {}, cuenta = {};
+    CALIF_COLUMNAS.forEach(function(col){
+      var c = configColumna(datos, col.campo), masAlto = 0;
+      g.estudiantes.forEach(function(e){
+        masAlto = Math.max(masAlto, valorColumna(col.campo, c.modo, (datos.alumnos[e.id] || {})[col.campo]));
+      });
+      var manual = numCalif(c.max);
+      if(col.campo === "partic") manual = Math.min(manual, 10);
+      cfg[col.campo] = c;
+      escala[col.campo] = {auto: masAlto, efectiva: manual > 0 ? manual : masAlto};
+      cuenta[col.campo] = c.modo === "escala" ? escala[col.campo].efectiva : masAlto;
+    });
+    var filas = g.estudiantes.map(function(e){
+      var d = datos.alumnos[e.id] || {};
+      var presentes = 0, retardos = 0;
+      fechas.forEach(function(f){
+        var v = leerAsistenciaBucket(g.id, f)[e.id] || "";
+        if(v === "P" || (v === "A" && esJustificada(g.id, f, e.id))) presentes++;
+        else if(v === "R") retardos++;
+      });
+      var asist = totalAsistencias(presentes, retardos);
+      var pts = {};
+      CALIF_COLUMNAS.forEach(function(col){
+        var modo = cfg[col.campo].modo;
+        pts[col.campo] = fraccionCalif(modo, valorColumna(col.campo, modo, d[col.campo]), escala[col.campo].efectiva) * puntos[col.campo];
+      });
+      var ptsAsist = dias ? Math.min(asist / dias, 1) * puntos.asist : 0;
+      var total = Math.max(0, Math.min(10, pts.trab + pts.partic + pts.examen + ptsAsist + numExtra(d.extra)));
+      return {estudiante:e, asist:asist, total:Math.round(total * 100) / 100};
+    });
+    return {unidad:unidad, modeloId:modeloId, modelo:modelo, puntos:puntos, datos:datos, dias:dias, cfg:cfg, escala:escala, cuenta:cuenta, filas:filas};
+  }
+  function refrescarTotalesCalif(){
+    var g = grupoActivo(); if(!g) return;
+    var u = unidadCalifActual(g); if(!u) return;
+    var r = calcularCalificaciones(g, u);
+    r.filas.forEach(function(f){
+      var celda = document.querySelector('[data-calif-total="' + f.estudiante.id + '"]');
+      if(celda) celda.innerHTML = "<b>" + f.total + "</b>";
+    });
+    var resumen = {califResAsist:r.dias, califResPartic:r.cuenta.partic, califResTrab:r.cuenta.trab};
+    Object.keys(resumen).forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.textContent = resumen[id];
+    });
+    CALIF_COLUMNAS.forEach(function(col){
+      var inp = document.querySelector('[data-calif-max="' + col.campo + '"]');
+      if(inp) inp.placeholder = "Auto (" + r.escala[col.campo].auto + ")";
+    });
+  }
+  function renderCalificaciones(){
+    var g = grupoActivo();
+    if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
+    var unidades = unidadesDelGrupo(g);
+    var unidad = unidadCalifActual(g);
+    var html = '<div class="card">';
+    html += '<div class="hist-head"><div><div class="eyebrow">Calificaciones</div><h2>'+esc(g.nombre)+'</h2></div>';
+    html += '<div class="field hist-group-field"><label for="selGrupoCalif">Grupo</label><select id="selGrupoCalif">';
+    state.grupos.forEach(function(grupo){
+      html += '<option value="'+esc(grupo.id)+'" '+(grupo.id===g.id?"selected":"")+'>'+esc(grupo.nombre)+'</option>';
+    });
+    html += '</select></div></div>';
+    if(!unidad){
+      return html + '<p class="empty">Este grupo no tiene unidades. Defínelas en "Historial y exportar" → "Unidades y periodos" para capturar calificaciones.</p></div>';
+    }
+    var r = calcularCalificaciones(g, unidad);
+    html += '<div class="hist-toolbar">';
+    html += '<div class="field" style="margin-bottom:0;"><label for="selUnidadCalif">Unidad</label><select id="selUnidadCalif">';
+    unidades.forEach(function(u){
+      html += '<option value="'+esc(u.id)+'" '+(u.id===unidad.id?"selected":"")+'>'+esc(u.nombre)+' ('+displayFecha(u.desde)+' - '+displayFecha(u.hasta)+')</option>';
+    });
+    html += '</select></div>';
+    html += '<div class="field" style="margin-bottom:0;"><label for="selModeloCalif">Modelo de ponderación</label><select id="selModeloCalif">';
+    Object.keys(CALIF_MODELOS).forEach(function(id){
+      html += '<option value="'+id+'" '+(id===r.modeloId?"selected":"")+'>'+CALIF_MODELOS[id].nombre+'</option>';
+    });
+    html += '</select></div>';
+    html += '<button class="btn" id="btnPdfCalif">Generar PDF</button>';
+    html += '<button class="btn secondary" id="btnCopiarCalif">Copiar para pegar en Excel</button>';
+    html += '</div>';
+    html += '<div class="hist-legend">';
+    html += '<span><b style="background:'+CALIF_COLORES.trab+';color:#000;width:auto;padding:0 10px;border-radius:12px;">Saber hacer '+r.modelo.pesos.hacer+'%</b> Trabajos en clase ('+r.puntos.trab+' pts)</span>';
+    html += '<span><b style="background:'+CALIF_COLORES.examen+';color:#000;width:auto;padding:0 10px;border-radius:12px;">Saber '+r.modelo.pesos.saber+'%</b> Exámen ('+r.puntos.examen+' pts)</span>';
+    html += '<span><b style="background:'+CALIF_COLORES.asist+';color:#000;width:auto;padding:0 10px;border-radius:12px;">Ser '+r.modelo.pesos.ser+'%</b> Asistencias ('+r.puntos.asist+' pto) + Participación ('+r.puntos.partic+' pto)</span>';
+    html += '</div>';
+    html += '<p class="helptext hist-rule">El extra suma o resta puntos directos y el total máximo es 10. La asistencia se calcula sola desde el historial.</p>';
+    html += '</div>';
+
+    // Cuadro aparte: cuántas asistencias, participaciones y trabajos hubo en el periodo.
+    html += '<div class="card"><h2>Resumen del periodo</h2><div class="hist-summary">';
+    html += '<div><strong id="califResAsist">'+r.dias+'</strong><span> asistencias (días de clase)</span></div>';
+    html += '<div><strong id="califResPartic">'+r.cuenta.partic+'</strong><span> participaciones</span></div>';
+    html += '<div><strong id="califResTrab">'+r.cuenta.trab+'</strong><span> trabajos en clase</span></div>';
+    html += '</div></div>';
+
+    // Cómo se captura cada columna.
+    html += '<div class="card"><h2>Cómo capturas cada columna</h2>';
+    html += '<p class="helptext" style="margin-top:0;">Elige si escribes porcentaje (0-100), calificación (0-10) o escala. En escala puedes poner el máximo o dejarlo vacío para que se calcule solo a partir del valor más alto capturado (en participación, con tope de 10).</p>';
+    html += '<div class="row" style="align-items:flex-end;">';
+    CALIF_COLUMNAS.forEach(function(col){
+      var c = r.cfg[col.campo];
+      html += '<div class="field" style="margin-bottom:0;min-width:200px;"><label for="modo_'+col.campo+'">'+col.titulo+' ('+r.puntos[col.campo]+' pts)</label><select id="modo_'+col.campo+'" data-calif-modo="'+col.campo+'">';
+      Object.keys(CALIF_MODOS).forEach(function(modo){
+        html += '<option value="'+modo+'" '+(modo===c.modo?"selected":"")+'>'+CALIF_MODOS[modo]+'</option>';
+      });
+      html += '</select></div>';
+      if(c.modo === "escala"){
+        html += '<div class="field" style="margin-bottom:0;width:130px;"><label for="max_'+col.campo+'">Máximo</label><input type="text" inputmode="decimal" id="max_'+col.campo+'" data-calif-max="'+col.campo+'" value="'+esc(c.max)+'" placeholder="Auto ('+r.escala[col.campo].auto+')"></div>';
+      }
+    });
+    html += '</div></div>';
+
+    html += '<div class="card">';
+    if(g.estudiantes.length === 0){
+      return html + '<p class="empty">Este grupo no tiene estudiantes todavía.</p></div>';
+    }
+    var modoCorto = {porcentaje:"%", calificacion:"0-10", escala:"escala"};
+    var th = function(texto, color, nota){
+      return '<th style="background:'+color+';">'+texto+(nota ? '<small class="unidad-etiqueta">'+nota+'</small>' : '')+'</th>';
+    };
+    html += '<div class="table-scroll"><table class="matriz"><thead><tr>';
+    html += th("Nombre", CALIF_COLORES.nombre);
+    html += th("Asistencias ("+r.puntos.asist+" pto)", CALIF_COLORES.asist, "automático");
+    html += th("Exámen ("+r.puntos.examen+" pts)", CALIF_COLORES.examen, modoCorto[r.cfg.examen.modo]);
+    html += th("Partic. ("+r.puntos.partic+" pto)", CALIF_COLORES.partic, modoCorto[r.cfg.partic.modo]);
+    html += th("Extra (±)", CALIF_COLORES.extra, "puntos");
+    html += th("Trabajos en clase ("+r.puntos.trab+" pts)", CALIF_COLORES.trab, modoCorto[r.cfg.trab.modo]);
+    html += th("Total (10)", CALIF_COLORES.total);
+    html += '</tr></thead><tbody>';
+    r.filas.forEach(function(f){
+      var e = f.estudiante, d = r.datos.alumnos[e.id] || {};
+      html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+'</td>';
+      html += '<td>'+f.asist+' / '+r.dias+'</td>';
+      ["examen","partic","extra","trab"].forEach(function(campo){
+        html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" style="width:70px;min-height:34px;padding:4px;text-align:center;"></td>';
+      });
+      html += '<td data-calif-total="'+esc(e.id)+'"><b>'+f.total+'</b></td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+    return html;
+  }
+
+  // HTML del reporte en PDF (horizontal, encabezados de color y puntaje entre paréntesis).
+  function htmlReporteCalif(g, r){
+    var u = r.unidad;
+    var textoModo = function(campo){
+      var m = r.cfg[campo].modo;
+      return m === "porcentaje" ? "en %" : (m === "calificacion" ? "de 0 a 10" : "sobre " + r.escala[campo].efectiva);
+    };
+    var th = function(texto, color, nota){
+      return '<th style="background:'+color+';">'+texto+(nota ? '<small>'+nota+'</small>' : '')+'</th>';
+    };
+    var chip = function(color, texto){ return '<span class="chip" style="background:'+color+';">'+texto+'</span>'; };
+    var hoy = new Date();
+    var html = '<!doctype html><html lang="es-MX"><head><meta charset="utf-8"><title>Calificaciones</title><style>';
+    html += '@page{size:letter landscape;margin:12mm;}';
+    html += '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+    html += 'body{font-family:"Segoe UI",Arial,sans-serif;font-size:11px;color:#0f172a;margin:0;}';
+    html += 'h1{font-size:20px;margin:0 0 2px;}.sub{color:#475569;margin-bottom:8px;}';
+    html += '.chips{margin:8px 0;}.chip{display:inline-block;padding:3px 10px;border-radius:12px;margin-right:8px;font-size:10.5px;}';
+    html += '.resumen{margin:8px 0 10px;}.resumen span{display:inline-block;border:1px solid #94a3b8;border-radius:6px;padding:4px 10px;margin-right:8px;}';
+    html += 'table{border-collapse:collapse;width:100%;}thead{display:table-header-group;}tr{page-break-inside:avoid;}';
+    html += 'th,td{border:1px solid #64748b;padding:4px 6px;text-align:center;}th{font-size:10.5px;}th small{display:block;font-weight:normal;font-size:9px;color:#334155;}';
+    html += 'td.n{text-align:left;}.pie{margin-top:10px;color:#64748b;font-size:9px;}';
+    html += '</style></head><body>';
+    html += '<h1>Calificaciones — '+esc(g.nombre)+'</h1>';
+    html += '<div class="sub">'+esc(u.nombre)+' ('+displayFecha(u.desde)+' - '+displayFecha(u.hasta)+')'+(g.materia ? ' · Materia: '+esc(g.materia) : '')+(g.profesor ? ' · Profesor: '+esc(g.profesor) : '')+' · '+esc(r.modelo.nombre)+'</div>';
+    html += '<div class="chips">';
+    html += chip(CALIF_COLORES.trab, 'Saber hacer '+r.modelo.pesos.hacer+'% · Trabajos en clase ('+r.puntos.trab+' pts)');
+    html += chip(CALIF_COLORES.examen, 'Saber '+r.modelo.pesos.saber+'% · Exámen ('+r.puntos.examen+' pts)');
+    html += chip(CALIF_COLORES.asist, 'Ser '+r.modelo.pesos.ser+'% · Asistencias ('+r.puntos.asist+' pto) + Participación ('+r.puntos.partic+' pto)');
+    html += '</div>';
+    html += '<div class="resumen"><span><b>'+r.dias+'</b> asistencias (días de clase)</span><span><b>'+r.cuenta.partic+'</b> participaciones</span><span><b>'+r.cuenta.trab+'</b> trabajos en clase</span></div>';
+    html += '<table><thead><tr>';
+    html += th("Nombre", CALIF_COLORES.nombre);
+    html += th("Asistencias ("+r.puntos.asist+" pto)", CALIF_COLORES.asist, "de "+r.dias+" días");
+    html += th("Exámen ("+r.puntos.examen+" pts)", CALIF_COLORES.examen, textoModo("examen"));
+    html += th("Partic. ("+r.puntos.partic+" pto)", CALIF_COLORES.partic, textoModo("partic"));
+    html += th("Extra (±)", CALIF_COLORES.extra, "puntos");
+    html += th("Trabajos en clase ("+r.puntos.trab+" pts)", CALIF_COLORES.trab, textoModo("trab"));
+    html += th("Total (10)", CALIF_COLORES.total);
+    html += '</tr></thead><tbody>';
+    r.filas.forEach(function(f){
+      var d = r.datos.alumnos[f.estudiante.id] || {};
+      html += '<tr><td class="n">'+esc(f.estudiante.nombre)+'</td><td>'+f.asist+' / '+r.dias+'</td>';
+      html += '<td>'+esc(d.examen || "")+'</td><td>'+esc(d.partic || "")+'</td><td>'+esc(d.extra || "")+'</td><td>'+esc(d.trab || "")+'</td>';
+      html += '<td><b>'+f.total+'</b></td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="pie">Generado el '+displayFecha(todayISO())+' a las '+String(hoy.getHours()).padStart(2,"0")+':'+String(hoy.getMinutes()).padStart(2,"0")+' con FullStatus. La asistencia incluye faltas justificadas y la regla de 3 retardos = 1 falta y 2 asistencias.</div>';
+    return html + '</body></html>';
+  }
+  // En Electron se genera el PDF desde el proceso principal (guardar como...);
+  // fuera de Electron se usa el cuadro de impresión del sistema como respaldo.
+  async function generarPdfCalificaciones(){
+    var g = grupoActivo(); if(!g) return;
+    var u = unidadCalifActual(g);
+    if(!u){ showToast("Define primero las unidades del grupo."); return; }
+    var html = htmlReporteCalif(g, calcularCalificaciones(g, u));
+    var nombre = "Calificaciones " + g.nombre + " " + u.nombre;
+    if(window.fullstatusPDF && window.fullstatusPDF.generar){
+      try{
+        var res = await window.fullstatusPDF.generar(html, nombre);
+        if(res && res.ok) showToast("PDF guardado.");
+        else if(!(res && res.cancelado)) showToast((res && res.error) || "No se pudo generar el PDF.");
+      }catch(err){
+        console.error(err);
+        showToast("No se pudo generar el PDF.");
+      }
+      return;
+    }
+    var marco = document.createElement("iframe");
+    marco.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    document.body.appendChild(marco);
+    marco.onload = function(){
+      marco.contentWindow.focus();
+      marco.contentWindow.print();
+      setTimeout(function(){ if(marco.parentNode) marco.parentNode.removeChild(marco); }, 1500);
+    };
+    marco.srcdoc = html;
+  }
+
+  // =========================================================
   // EVENTOS
   // =========================================================
   function attachHandlers(){
+    // Calificaciones
+    var selGrupoCalif = document.getElementById("selGrupoCalif");
+    if(selGrupoCalif) selGrupoCalif.addEventListener("change", function(){ state.grupoActivoId = selGrupoCalif.value; calUnidad = ""; saveState(false); render(); });
+    var selUnidadCalif = document.getElementById("selUnidadCalif");
+    if(selUnidadCalif) selUnidadCalif.addEventListener("change", function(){ calUnidad = selUnidadCalif.value; render(); });
+    document.querySelectorAll("[data-calif-modo]").forEach(function(sel){
+      sel.addEventListener("change", function(){
+        var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;
+        var datos = califBucket(g.id, u.id), campo = sel.getAttribute("data-calif-modo");
+        if(!datos.cols[campo]) datos.cols[campo] = {};
+        datos.cols[campo].modo = sel.value;
+        guardarCalificaciones(); render();
+      });
+    });
+    document.querySelectorAll("[data-calif-max]").forEach(function(inp){
+      inp.addEventListener("input", function(){
+        var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;
+        var datos = califBucket(g.id, u.id), campo = inp.getAttribute("data-calif-max");
+        if(!datos.cols[campo]) datos.cols[campo] = {};
+        datos.cols[campo].max = inp.value;
+        guardarCalificaciones(); refrescarTotalesCalif();
+      });
+    });
+    document.querySelectorAll("[data-calif]").forEach(function(inp){
+      inp.addEventListener("input", function(){
+        var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;
+        var datos = califBucket(g.id, u.id), id = inp.getAttribute("data-estudiante");
+        if(!datos.alumnos[id]) datos.alumnos[id] = {};
+        datos.alumnos[id][inp.getAttribute("data-calif")] = inp.value;
+        guardarCalificaciones(); refrescarTotalesCalif();
+      });
+    });
+    var selModeloCalif = document.getElementById("selModeloCalif");
+    if(selModeloCalif) selModeloCalif.addEventListener("change", function(){
+      var g = grupoActivo(); if(!g) return;
+      if(!califDatos[g.id]) califDatos[g.id] = {};
+      califDatos[g.id]._modelo = selModeloCalif.value;
+      guardarCalificaciones(); render();
+    });
+    var btnPdfCalif = document.getElementById("btnPdfCalif");
+    if(btnPdfCalif) btnPdfCalif.addEventListener("click", generarPdfCalificaciones);
+    var btnCopiarCalif = document.getElementById("btnCopiarCalif");
+    if(btnCopiarCalif) btnCopiarCalif.addEventListener("click", function(){
+      var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;
+      var r = calcularCalificaciones(g, u);
+      var filas = [["Nombre","Asistencias","Exámen","Partic.","Extra","Trabajos en clase","Total"]];
+      r.filas.forEach(function(f){
+        var d = r.datos.alumnos[f.estudiante.id] || {};
+        filas.push([f.estudiante.nombre, f.asist, d.examen || "", d.partic || "", d.extra || "", d.trab || "", f.total]);
+      });
+      copiarPortapapeles(filas.map(function(fila){ return fila.join("\t"); }).join("\n"));
+    });
+
     var btnResEntrar = document.getElementById("btnResEntrar");
     if(btnResEntrar){
       var entrar = function(){
@@ -1853,6 +2227,7 @@
       delete state.asistencias[g.id];
       delete state.justificantes[g.id];
       if(state.fechasVacias) delete state.fechasVacias[g.id];
+      if(califDatos[g.id]){ delete califDatos[g.id]; guardarCalificaciones(); }
       state.grupoActivoId = state.grupos.length ? state.grupos[0].id : null;
       pasarIndex = null;
       saveState(); render();

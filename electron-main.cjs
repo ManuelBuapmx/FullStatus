@@ -1,6 +1,7 @@
-const { app, BrowserWindow, shell, Menu } = require("electron");
+const { app, BrowserWindow, shell, Menu, ipcMain, dialog } = require("electron");
 const http = require("http");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const ROOT = __dirname;
@@ -46,6 +47,52 @@ function startLocalServer() {
   return server;
 }
 
+// Genera un PDF a partir del HTML que arma la interfaz (pestaña Calificaciones):
+// lo carga en una ventana oculta sin JavaScript, lo imprime a PDF y pide dónde guardarlo.
+ipcMain.handle("fullstatus:generar-pdf", async (event, datos) => {
+  const origen = event.senderFrame ? event.senderFrame.url : "";
+  if (!origen.startsWith("http://localhost:" + PORT)) return { ok: false, error: "Origen no permitido." };
+  if (!datos || typeof datos.html !== "string" || datos.html.length > 5000000) return { ok: false, error: "Contenido no válido." };
+
+  const nombreBase = String(datos.nombre || "Calificaciones").replace(/[\\/:*?"<>|]/g, "").trim().slice(0, 80) || "Calificaciones";
+  const ventanaOrigen = BrowserWindow.fromWebContents(event.sender);
+  const temporal = path.join(os.tmpdir(), "fullstatus-" + Date.now() + ".html");
+  let ventanaPdf = null;
+  try {
+    fs.writeFileSync(temporal, datos.html, "utf8");
+    ventanaPdf = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false }
+    });
+    await ventanaPdf.loadFile(temporal);
+    const pdf = await ventanaPdf.webContents.printToPDF({
+      pageSize: "Letter",
+      landscape: true,
+      printBackground: true,
+      preferCSSPageSize: true
+    });
+
+    const eleccion = await dialog.showSaveDialog(ventanaOrigen, {
+      title: "Guardar calificaciones en PDF",
+      defaultPath: path.join(app.getPath("documents"), nombreBase + ".pdf"),
+      filters: [{ name: "PDF", extensions: ["pdf"] }]
+    });
+    // Tras un cuadro nativo, se devuelve el foco del teclado a la ventana de la app.
+    if (ventanaOrigen) { ventanaOrigen.focus(); event.sender.focus(); }
+    if (eleccion.canceled || !eleccion.filePath) return { ok: false, cancelado: true };
+
+    fs.writeFileSync(eleccion.filePath, pdf);
+    shell.showItemInFolder(eleccion.filePath);
+    return { ok: true };
+  } catch (error) {
+    console.error("No se pudo generar el PDF", error);
+    return { ok: false, error: "No se pudo generar el PDF." };
+  } finally {
+    if (ventanaPdf && !ventanaPdf.isDestroyed()) ventanaPdf.close();
+    fs.unlink(temporal, () => {});
+  }
+});
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1200,
@@ -63,7 +110,8 @@ function createWindow() {
     },
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.cjs")
     }
   });
 

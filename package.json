@@ -20,6 +20,7 @@
     "productName": "FullStatus",
     "files": [
       "electron-main.cjs",
+      "preload.cjs",
       "index.html",
       "styles.css",
       "app.js",

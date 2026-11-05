@@ -30,8 +30,8 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 |---|---|
 | Windows (Electron) | `electron-main.cjs` levanta un servidor local interno en el puerto 5173 y abre una ventana apuntando a él (necesario para el inicio de sesión de Google). Sirve la carpeta raíz. Se empaqueta con electron-builder (target `nsis`). |
 
-- **Archivo de lógica único:** `app.js` es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 4 pestañas, panel y toast) y `app.js` renderiza el resto.
-- **Pestañas:** `Grupos` (crear grupos, alumnos, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos), `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, unidades y periodos, copiar al portapapeles, descargar xlsx, actualizar Drive) y `Resultados` (lectura de los exámenes en Supabase, solo lectura).
+- **Archivo de lógica único:** `app.js` es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 5 pestañas, panel y toast) y `app.js` renderiza el resto.
+- **Pestañas:** `Grupos` (crear grupos, alumnos, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos), `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, unidades y periodos, copiar al portapapeles, descargar xlsx, actualizar Drive), `Calificaciones` (tabla por grupo y unidad con la asistencia calculada sola; ver "Calificaciones") y `Resultados` (lectura de los exámenes en Supabase, solo lectura).
 - **Dependencias externas en ejecución:** Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`) y Supabase (solo la pestaña Resultados). ExcelJS (`vendor/`) y la fuente Inter (`fonts/`) son locales. Todo lo demás es offline.
 
 ## Datos y persistencia
@@ -42,6 +42,7 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 | `localStorage` `listaAsistenciaCambiosPendientes_v1` | `"1"` si hay cambios sin subir a Drive |
 | `localStorage` `listaAsistenciaDriveFileId_v1` | Id del archivo de Drive usado |
 | `localStorage` `listaAsistenciaGoogleDriveAuth_v3` | Marca de que ya se concedió permiso (evita pedir consentimiento otra vez) |
+| `localStorage` `listaAsistenciaCalificaciones_v1` | Calificaciones capturadas a mano: `{ grupoId: { _modelo?: "nuevo"\|"anterior", unidadId: { cols: { examen\|partic\|trab: { modo, max } }, alumnos: { estudianteId: { examen, partic, extra, trab } } } } }`. Solo viven en la app (no se sincronizan con Drive) |
 | IndexedDB `integratorium_cache_v1` | Copia local del Excel institucional (`plantillaExcel`) para trabajar sin conexión; se restaura al iniciar con `restaurarCacheLocal` |
 
 Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor, unidades?: [{id, nombre, desde, hasta}] }`; `asistencias[grupoId][fechaISO][estudianteId]` con estados `P` (asistencia, exporta `1`), `A` (falta, `0`) y `R` (retardo, `2`); `justificantes[grupoId][fechaISO][estudianteId] = { nota }`. Una fecha existe solo si tiene al menos una marca (`purgarFechasVacias` limpia las vacías al cargar). **No cambiar estas claves ni el formato sin plan de migración.**
@@ -55,6 +56,21 @@ Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor
 - **Faltas equivalentes** de un alumno (`faltasEquivalentes`): `faltas injustificadas + floor(retardos / 3)`.
 - La regla es **por alumno a lo largo de varias fechas**; el resumen de un solo día (`resumenDia`) muestra conteos simples (presentes = `P` + justificadas, faltas sin justificar, retardos) y no aplica la conversión.
 - Las celdas del Excel guardan el valor original (`1`, `0`, `2`); la regla solo afecta a los **totales** (columna TOTAL del Excel, "Total presente" del Historial y "Copiar para pegar en Excel").
+
+## Calificaciones
+
+Pestaña **Calificaciones** (`renderCalificaciones`, `calcularCalificaciones`, `refrescarTotalesCalif`, `htmlReporteCalif`, `generarPdfCalificaciones`), basada en la hoja de calificaciones del usuario. Una tabla por grupo y **unidad** (solo se muestran unidades; si el grupo no tiene, pide definirlas en Historial → "Unidades y periodos"; por defecto se elige la unidad que contiene el día de hoy o la primera).
+
+- **Ponderación (dos modelos, `CALIF_MODELOS`)**, elegible por grupo con el selector "Modelo de ponderación" (se guarda en `califDatos[grupoId]._modelo`):
+  - **Modelo anterior** (10° grado, último cuatrimestre): trabajos 60 (6 pts), examen 20 (2 pts), participación 10 (1 pto), asistencias 10 (1 pto). Chips: Saber hacer 60% / Saber 20% / Ser 20%.
+  - **Modelo nuevo** (grados anteriores; el que quedará): trabajos 50 (5 pts), examen 30 (3 pts), participación 10 (1 pto), asistencias 10 (1 pto). Chips: Saber hacer 50% / Saber 30% / Ser 20%.
+  - Si no se ha elegido, los grupos cuyo nombre empieza con "10" (p. ej. `10A`) usan el modelo anterior y el resto el nuevo (`modeloCalifId`).
+  - El **Extra** suma o resta puntos directos. **TOTAL** = suma de puntos, mínimo 0 y tope 10. Los colores de encabezado (los de la hoja original) están en `CALIF_COLORES`.
+- **Asistencias (automático):** `totalAsistencias` sobre las fechas de la unidad (justificadas cuentan; 3 retardos = 1 falta + 2 asistencias): `asistencias / días de la unidad` × 1 pto.
+- **Modo de captura por columna** (Exámen, Partic., Trabajos): *Porcentaje* (0-100), *Calificación* (0-10) o *Escala*. En escala se escribe el máximo o se deja vacío (automático = valor más alto capturado; en participación, con tope de 10). Por defecto: Exámen en calificación, Partic. y Trabajos en escala automática. Extra y Asistencias no tienen modo.
+- **Resumen del periodo (cuadro aparte):** asistencias (días de clase), participaciones y trabajos en clase del periodo (el máximo de la escala efectiva, o el valor más alto capturado si la columna no está en escala).
+- **PDF:** botón "Generar PDF" (horizontal, encabezados de color con el puntaje entre paréntesis, ponderaciones 60/20/20, resumen del periodo y tabla). En Electron lo genera el proceso principal (`ipcMain` `fullstatus:generar-pdf` en `electron-main.cjs`, expuesto por `preload.cjs` como `window.fullstatusPDF.generar`): ventana oculta sin JavaScript → `printToPDF` → "Guardar como". Fuera de Electron usa el cuadro de impresión como respaldo.
+- Lo capturado se guarda al escribir en `listaAsistenciaCalificaciones_v1`; no marca "cambios pendientes" ni se escribe en el Excel institucional. "Copiar para pegar en Excel" copia la tabla.
 
 ## Sincronización con Google Drive / Excel institucional
 
@@ -72,7 +88,8 @@ Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor
 | `index.html`, `styles.css`, `app.js` | Aplicación (interfaz y lógica) |
 | `vendor/exceljs.min.js` | ExcelJS local (para funcionar sin internet) |
 | `fonts/` | Fuente Inter local (`inter-latin-wght-normal.woff2`) y su licencia `OFL.txt` |
-| `electron-main.cjs` | Ventana de escritorio (Windows) y servidor local interno |
+| `electron-main.cjs` | Ventana de escritorio (Windows), servidor local interno y generación de PDF (IPC) |
+| `preload.cjs` | Puente seguro (`contextBridge`) que expone `window.fullstatusPDF` a la interfaz |
 | `package.json` | Scripts (`start:windows`, `dist:windows`) y configuración de electron-builder |
 | `FS.png`, `FullStatus.png` | Icono de la app y logo de arranque |
 | `.github/agents/fullstatus-maintainer.agent.md` | Instrucciones del agente de mantenimiento de Copilot |
@@ -97,6 +114,27 @@ npm run dist:windows     # instalador de Windows (electron-builder)
 Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
 
 ## Historial de cambios
+
+### 2026-11-04 22:30 — Calificaciones: modelo de ponderación anterior (10°) y nuevo
+- **Corrección de criterio:** el 60/20/20 aplica solo a 10° grado (último cuatrimestre con el modelo anterior). Los demás grados usan el modelo nuevo: trabajos 50, examen 30, participación 10 y asistencias 10 (5 / 3 / 1 / 1 puntos). Esto también coincide con el `×5` de trabajos de la fórmula original del Excel de calificaciones.
+- Nuevo `CALIF_MODELOS`, `modeloCalifId` y selector "Modelo de ponderación" por grupo; por defecto los grupos que empiezan con "10" usan el modelo anterior. Los puntos por columna, los encabezados, los chips de ponderación y el PDF (que ahora indica el modelo) se calculan según el modelo del grupo. Se retiró `CALIF_PUNTOS`.
+- Supuesto: en el modelo nuevo se mantienen las mismas categorías (Saber hacer = trabajos, Saber = examen, Ser = asistencias + participación) con 50 / 30 / 20.
+- Probado solo con `node` y datos de ejemplo (grupos `10A` y `4C`); no se probó en Electron.
+
+### 2026-11-04 22:00 — Calificaciones: solo unidades, modos por columna, resumen y PDF
+- **Solo unidades:** se quitó la opción "Todas las fechas"; la pestaña exige elegir una unidad (por defecto la actual). Los datos de la versión anterior guardados como "general" ya no se usan.
+- **Ponderación 60/20/20 con puntaje por columna:** Trabajos 6 pts, Exámen 2, Asistencias 1, Participación 1, Extra directo, tope 10. **Cambio frente a la versión anterior de la pestaña:** trabajos valían 5 puntos (copiado de la fórmula del Excel de calificaciones) y ahora valen 6, para que Saber hacer sea realmente el 60%. Si el criterio es otro, se ajusta en `CALIF_PUNTOS`.
+- **Modos por columna** (porcentaje / calificación / escala con máximo manual o automático) para Exámen, Partic. y Trabajos; el "Máx. trabajos" suelto se sustituyó por esta configuración (compatibilidad en `califBucket`).
+- **Cuadro "Resumen del periodo"** con asistencias (días), participaciones y trabajos en clase.
+- **Botón "Generar PDF":** nuevos `preload.cjs` y manejador IPC en `electron-main.cjs`; `package.json` incluye `preload.cjs` en `build.files`. Encabezados de color como la hoja original y puntaje entre paréntesis.
+- Archivos tocados: `app.js`, `electron-main.cjs`, `package.json`, `README.md` y nuevo `preload.cjs`.
+- Probado solo con `node` y datos de ejemplo (cálculo de totales y armado del HTML); el PDF y la interfaz no se probaron en Electron. Probar: generar el PDF, confirmar que guarda, que conserva colores y que la app sigue aceptando teclado después del cuadro "Guardar como".
+
+### 2026-11-04 15:20 — Nueva pestaña "Calificaciones"
+- Nueva pestaña con tabla Nombre / Asistencias / Exámen / Partic. / Extra / Trabajos en clase / Total, por grupo y unidad. La asistencia se rellena sola desde el historial (regla de totales vigente) y lo demás se captura a mano. Fórmula y reglas en la sección "Calificaciones".
+- Funciones nuevas en `app.js`: `cargarCalificaciones`, `guardarCalificaciones`, `numCalif`, `claveCalif`, `califBucket`, `calcularCalificaciones`, `textoInfoCalif`, `refrescarTotalesCalif`, `renderCalificaciones` y sus eventos en `attachHandlers`. `render` y el botón de pestaña (`index.html`) se actualizaron. Al eliminar un grupo también se borran sus calificaciones.
+- Datos en una clave nueva (`listaAsistenciaCalificaciones_v1`); no se cambió ninguna clave ni formato existente.
+- **Pendiente:** no hay exportación a un Excel con este formato ni sincronización con Drive. No se ejecutó la app: solo se validó la sintaxis con `node --check`. Probar con la hoja `4C 2` y comparar totales contra el Excel de calificaciones.
 
 ### 2026-11-04 14:49 — Totales: la falta justificada cuenta como asistencia y 3 retardos = 1 falta + 2 asistencias
 - **Regla nueva (`totalAsistencias`):** el total de asistencias de un alumno es `P + justificadas + retardos − floor(retardos / 3)`. Con 1 o 2 retardos siguen contando como asistencias normales; al completar el tercero, ese grupo de 3 días pasa a ser 1 falta injustificada y 2 asistencias. Antes los retardos no sumaban nada al total.
@@ -200,6 +238,7 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Pendientes conocidos
 
+- Calificaciones: confirmar los nombres de las categorías del modelo nuevo, probar el PDF en Electron, exportar a Excel con el formato de CALIFICACIONES.xlsx y decidir si se sincroniza con Drive. Recompilar con `npm run dist:windows` para verificar que `preload.cjs` entra en el instalador.
 - Probar en Electron la regla de totales (1, 2, 3 y 4 retardos, faltas justificadas) y revisar la columna TOTAL del Excel real.
 - Si la columna TOTAL de la hoja institucional contiene una fórmula propia, `crearBufferPlantillaInstitucional` la sustituye por el valor calculado (comportamiento previo); confirmar que es lo deseado.
 - Unidades: no hay edición (solo agregar/quitar), ni totales de asistencia por unidad en la tabla, ni se importan/exportan al Excel institucional; tampoco se muestra la unidad en "Pasar lista". Probar en Electron.
