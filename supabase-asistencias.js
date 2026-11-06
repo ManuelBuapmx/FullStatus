@@ -6,6 +6,10 @@
    Publica las asistencias de FullStatus en Supabase para que cada alumno las
    consulte desde la app FullStatus Student.
 
+   CAMBIO (5/nov/2026): window.FullStatusSupabase.rest(ruta, opciones): llamada REST a tablas con la
+   misma sesión de administrador; la usa supabase-examenes.js (pestaña Exámenes). No cambia nada de
+   lo que ya publicaba este archivo.
+
    CAMBIO (10/oct/2026): además de las asistencias, ahora se publican las UNIDADES
    de cada grupo (nombre + fecha inicial y final, las de Historial → "Unidades y
    periodos"). Viajan dentro de cada grupo del envío, en la clave "unidades", y la
@@ -445,6 +449,25 @@
       });
       const datos = await resp.json().catch(function () { return {}; });
       if (!resp.ok) throw new Error(datos.message || 'Error en ' + nombre + ' (' + resp.status + ')');
+      return datos;
+    },
+    // Llamada REST a una tabla (la usa supabase-examenes.js): ruta SIN "/rest/v1/", por ejemplo
+    // 'preguntas?select=id'. opciones = { method, headers, body } (el body se manda como JSON).
+    // Devuelve { sinSesion: true } si no hay sesión; lanza error si Supabase la rechaza. La
+    // seguridad real son las políticas RLS: solo la cuenta de administrador puede escribir.
+    rest: async function (ruta, opciones) {
+      const token = await obtenerToken();
+      if (!token) return { sinSesion: true };
+      opciones = opciones || {};
+      const resp = await fetch(SUPABASE_URL + '/rest/v1/' + ruta, {
+        method: opciones.method || 'GET',
+        headers: Object.assign({ apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, opciones.headers || {}),
+        body: opciones.body === undefined ? undefined : JSON.stringify(opciones.body)
+      });
+      const texto = await resp.text();
+      let datos = null;
+      try { datos = texto ? JSON.parse(texto) : null; } catch (e) { /* respuesta sin JSON */ }
+      if (!resp.ok) throw new Error((datos && (datos.message || datos.hint)) || 'Error en ' + ruta + ' (' + resp.status + ')');
       return datos;
     }
   };
