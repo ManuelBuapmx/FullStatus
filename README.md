@@ -30,9 +30,9 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 |---|---|
 | Windows (Electron) | `electron-main.cjs` levanta un servidor local interno en el puerto 5173 y abre una ventana apuntando a él (necesario para el inicio de sesión de Google). Sirve la carpeta raíz. Se empaqueta con electron-builder (target `nsis`). |
 
-- **Archivo de lógica único:** `app.js` es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 5 pestañas, panel y toast) y `app.js` renderiza el resto.
-- **Pestañas:** `Grupos` (crear grupos, alumnos, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos), `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, unidades y periodos, copiar al portapapeles, descargar xlsx, actualizar Drive), `Calificaciones` (tabla por grupo y unidad con la asistencia calculada sola; ver "Calificaciones") y `Resultados` (lectura de los exámenes en Supabase, solo lectura).
-- **Dependencias externas en ejecución:** Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`) y Supabase (solo la pestaña Resultados). ExcelJS (`vendor/`) y la fuente Inter (`fonts/`) son locales. Todo lo demás es offline.
+- **Archivo de lógica único:** `app.js` es una IIFE con todo el código; `index.html` solo contiene el esqueleto (cabecera, 6 pestañas, panel y toast) y `app.js` renderiza el resto.
+- **Pestañas:** `Grupos` (crear grupos, alumnos, cargar de Drive), `Pasar lista` (una tarjeta por alumno; segundo pase para convertir faltas en retardos), `Historial y exportar` (consultar, justificar, editar/eliminar/renombrar fechas, unidades y periodos, copiar al portapapeles, descargar xlsx, actualizar Drive), `Calificaciones` (tabla por grupo y unidad con la asistencia calculada sola; ver "Calificaciones") `Resultados` (lectura de los exámenes en Supabase, solo lectura) y `Exámenes` (subir exámenes por script a Supabase; ver "Exámenes").
+- **Dependencias externas en ejecución:** Google Identity Services (`accounts.google.com/gsi/client`, se carga con reintentos por `asegurarGoogleIdentity`) y Supabase (pestañas Resultados y Exámenes, y la publicación de asistencias y calificaciones). ExcelJS (`vendor/`) y la fuente Inter (`fonts/`) son locales. Todo lo demás es offline.
 
 ## Datos y persistencia
 
@@ -43,6 +43,7 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 | `localStorage` `listaAsistenciaDriveFileId_v1` | Id del archivo de Drive usado |
 | `localStorage` `listaAsistenciaGoogleDriveAuth_v3` | Marca de que ya se concedió permiso (evita pedir consentimiento otra vez) |
 | `localStorage` `listaAsistenciaCalificaciones_v1` | Calificaciones capturadas a mano: `{ grupoId: { _modelo?: "nuevo"\|"anterior", unidadId: { cols: { examen\|partic\|trab: { modo, max } }, alumnos: { estudianteId: { examen, partic, extra, trab } } } } }`. Solo viven en la app (no se sincronizan con Drive) |
+| `localStorage` `fullstatusExamenesBorrador_v1` | Borrador de la pestaña Exámenes: `{ texto, materiaId, modo }` (el script pegado, la materia elegida y "reemplazar"/"agregar"). Se guarda al escribir para no perderlo sin internet |
 | IndexedDB `integratorium_cache_v1` | Copia local del Excel institucional (`plantillaExcel`) para trabajar sin conexión; se restaura al iniciar con `restaurarCacheLocal` |
 
 Modelo: `grupos[] = { id, nombre, estudiantes: [{id, nombre}], materia, profesor, unidades?: [{id, nombre, desde, hasta}] }`; `asistencias[grupoId][fechaISO][estudianteId]` con estados `P` (asistencia, exporta `1`), `A` (falta, `0`) y `R` (retardo, `2`); `justificantes[grupoId][fechaISO][estudianteId] = { nota }`. Una fecha existe solo si tiene al menos una marca (`purgarFechasVacias` limpia las vacías al cargar). **No cambiar estas claves ni el formato sin plan de migración.**
@@ -72,6 +73,19 @@ Pestaña **Calificaciones** (`renderCalificaciones`, `calcularCalificaciones`, `
 - **PDF:** botón "Generar PDF" (horizontal, encabezados de color con el puntaje entre paréntesis, ponderaciones 60/20/20, resumen del periodo y tabla). En Electron lo genera el proceso principal (`ipcMain` `fullstatus:generar-pdf` en `electron-main.cjs`, expuesto por `preload.cjs` como `window.fullstatusPDF.generar`): ventana oculta sin JavaScript → `printToPDF` → "Guardar como". Fuera de Electron usa el cuadro de impresión como respaldo.
 - Lo capturado se guarda al escribir en `listaAsistenciaCalificaciones_v1`; no marca "cambios pendientes" ni se escribe en el Excel institucional. "Copiar para pegar en Excel" copia la tabla.
 
+## Exámenes
+
+Pestaña **Exámenes** (`supabase-examenes.js`; `app.js` solo la llama desde `render`): sube a Supabase los exámenes que los alumnos contestan en FullStatus Student. Es la lógica de la pestaña "Importar" de `admin.html` (repo CMKAdmin) portada aquí.
+
+- **Flujo:** iniciar sesión (la misma de "☁ Alumnos") → elegir o crear la materia → pegar el script de Apps Script para Forms (el que genera Gemini) → **Analizar** (vista previa con secciones, preguntas, respuesta correcta marcada, videos y errores con su línea) → **Subir examen** → confirmación en la pestaña.
+- **Qué entiende el script:** `FormApp.create`, `addMultipleChoiceItem`, `setTitle`, `createChoice(valor, esCorrecta)`, `setChoices`; el título de `FormApp.create` / `addSectionHeaderItem` / `addPageBreakItem` es la **sección**; el `setHelpText` del encabezado y `addVideoItem().setVideoUrl` son el **contexto**. Lo que la app no usa se ignora y se avisa. "Limpiar y corregir" es automático: quita ``` e invisibles, arregla comillas curvas, saltos de línea dentro de un texto y comillas interiores sin escapar; un script que ya compila no se modifica.
+- **Videos:** un link de YouTube se guarda siempre como `https://www.youtube.com/watch?v=ID`. Un link que no sea de YouTube es **error** (los links externos rompen el examen). Se quita la numeración del título ("1. ¿...?") porque la app del alumno ya numera.
+- **Seguridad:** el script se ejecuta para analizarlo, así que corre en un `iframe` con `sandbox="allow-scripts"` **sin** `allow-same-origin`: no puede leer el `localStorage` ni el IndexedDB de FullStatus. La respuesta correcta solo se envía; nunca se vuelve a leer de la base (`select=id`).
+- **Subida segura:** *Reemplazar* inserta las preguntas nuevas **desactivadas** → desactiva las anteriores → activa las nuevas (si falla a la mitad el alumno nunca se queda sin examen; el mensaje dice cómo quedó). *Agregar* las inserta activas al final del orden y avisa si ya existen con el mismo texto. Cada paso comprueba las filas afectadas (RLS). Las preguntas anteriores se desactivan, **no se borran**.
+- **Qué NO hace:** no activa la materia, no fija horarios ni asigna alumnos (eso sigue en `admin.html`; una materia nueva se crea **desactivada**), no edita preguntas sueltas ni las borra, no lee la respuesta correcta.
+- **Offline primero:** analizar no necesita internet; cargar materias y subir sí. Sin internet o sin sesión no se rompe nada de lo demás.
+- **Decisión que cambia (2026-11-05):** hasta ahora la app solo *leía* Resultados y publicaba asistencias/calificaciones mediante funciones RPC. Esta pestaña **escribe directamente** en las tablas `materias` y `preguntas` del proyecto de exámenes, con la sesión de administrador y las políticas RLS "admin" que ya usa `admin.html`. Por eso `window.FullStatusSupabase.rest` se agregó a `supabase-asistencias.js`.
+
 ## Sincronización con Google Drive / Excel institucional
 
 - Autenticación OAuth con Google Identity Services (scopes `drive` y `spreadsheets`); el client id está en `app.js` (es público por diseño; el origen debe estar registrado en Google Cloud Console).
@@ -86,6 +100,9 @@ Pestaña **Calificaciones** (`renderCalificaciones`, `calcularCalificaciones`, `
 | Archivo | Descripción |
 |---|---|
 | `index.html`, `styles.css`, `app.js` | Aplicación (interfaz y lógica) |
+| `supabase-asistencias.js` | Publica asistencias y unidades en Supabase (RPC `publicar_asistencias`), guarda la sesión de administrador y expone `window.FullStatusSupabase` (`rpc`, `rest`, `abrir`, `haySesion`) |
+| `supabase-calificaciones.js` | Publica las calificaciones por unidad (RPC `publicar_calificaciones`) |
+| `supabase-examenes.js` | Pestaña Exámenes: analiza el script pegado y sube el examen a Supabase (ver "Exámenes") |
 | `vendor/exceljs.min.js` | ExcelJS local (para funcionar sin internet) |
 | `fonts/` | Fuente Inter local (`inter-latin-wght-normal.woff2`) y su licencia `OFL.txt` |
 | `electron-main.cjs` | Ventana de escritorio (Windows), servidor local interno y generación de PDF (IPC) |
@@ -114,6 +131,14 @@ npm run dist:windows     # instalador de Windows (electron-builder)
 Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
 
 ## Historial de cambios
+
+### 2026-11-05 (noche) — Nueva pestaña "Exámenes": subir exámenes a FullStatus Student por script
+- **Qué:** nueva pestaña **Exámenes** para subir a Supabase los exámenes que los alumnos contestan en FullStatus Student, pegando el script de Apps Script para Forms que genera Gemini. Detalle de flujo, reglas y límites en la sección "Exámenes".
+- **Archivos:** nuevo `supabase-examenes.js`; `index.html` (botón de pestaña `examenes` y `<script>` después de `supabase-calificaciones.js`); `app.js` (5 líneas en `render` que llaman a `window.FullStatusExamenes.montar`); `supabase-asistencias.js` (nuevo `window.FullStatusSupabase.rest`, sin tocar lo que ya publicaba); `package.json` (`supabase-examenes.js` en `build.files`); este README.
+- **Decisión:** la app ahora **escribe** en `materias` y `preguntas` (antes solo leía `resultados` y publicaba por RPC). Se reutiliza la sesión de "☁ Alumnos"; no hay otro inicio de sesión ni otra clave.
+- **Diferencias con `admin.html`:** la subida inserta primero desactivado y activa al final (no desactiva primero); los links que no son de YouTube son error; los links de YouTube se normalizan a `watch?v=ID`; el script se ejecuta aislado en un iframe sin acceso al almacenamiento de la app.
+- **Probado solo con `node`/jsdom:** parser con scripts tipo Gemini, scripts rotos (comillas curvas, saltos de línea, comillas sin escapar, error con línea), validaciones, secuencia de subida con una API simulada (incluye fallo por RLS, por red y a la mitad) y el flujo de la pestaña con un `fetch` simulado y el iframe simulado con `vm`. **No se probó en Electron ni contra el Supabase real.** Probar: iniciar sesión, analizar el script real de Gemini, subir a una materia **desactivada** de prueba y comprobar en FullStatus Student que lo ve (después de activarla en admin.html); probar *Reemplazar* y *Agregar*; probar que el iframe aislado funciona en Electron (si el análisis se queda en "Analizando..." o dice que tardó demasiado, ahí está el problema); recompilar con `npm run dist:windows` y comprobar que `supabase-examenes.js` entra en el instalador.
+- **Observación:** este README no documentaba `supabase-asistencias.js` ni `supabase-calificaciones.js`; se agregaron a la tabla de estructura.
 
 ### 2026-11-04 22:30 — Calificaciones: modelo de ponderación anterior (10°) y nuevo
 - **Corrección de criterio:** el 60/20/20 aplica solo a 10° grado (último cuatrimestre con el modelo anterior). Los demás grados usan el modelo nuevo: trabajos 50, examen 30, participación 10 y asistencias 10 (5 / 3 / 1 / 1 puntos). Esto también coincide con el `×5` de trabajos de la fórmula original del Excel de calificaciones.
@@ -237,6 +262,8 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 - Los grupos nuevos generan su pestaña clonando la hoja "Plantilla".
 
 ## Pendientes conocidos
+
+- Exámenes: probar en Electron (iframe aislado, sesión compartida con "☁ Alumnos") y contra el Supabase real con una materia de prueba; no hay edición ni borrado de preguntas sueltas (se hace en admin.html); un fallo a la mitad de *Reemplazar* deja preguntas nuevas desactivadas que hay que activar o borrar en admin.html; el análisis ejecuta el script pegado (aislado, pero un ciclo infinito congelaría la ventana hasta que el tope de 10 s lo cancele, si el navegador lo permite).
 
 - Calificaciones: confirmar los nombres de las categorías del modelo nuevo, probar el PDF en Electron, exportar a Excel con el formato de CALIFICACIONES.xlsx y decidir si se sincroniza con Drive. Recompilar con `npm run dist:windows` para verificar que `preload.cjs` entra en el instalador.
 - Probar en Electron la regla de totales (1, 2, 3 y 4 retardos, faltas justificadas) y revisar la columna TOTAL del Excel real.
