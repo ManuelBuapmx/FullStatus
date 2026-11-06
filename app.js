@@ -287,6 +287,11 @@
     else if(currentTab === "pasar") panel.innerHTML = renderPasar();
     else if(currentTab === "calificaciones") panel.innerHTML = renderCalificaciones();
     else if(currentTab === "resultados") panel.innerHTML = renderResultados();
+    // Exámenes: lo dibuja supabase-examenes.js (conserva su propio estado entre renders).
+    else if(currentTab === "examenes"){
+      if(window.FullStatusExamenes) window.FullStatusExamenes.montar(panel);
+      else panel.innerHTML = '<div class="card"><p class="empty">Falta cargar supabase-examenes.js (revisa index.html).</p></div>';
+    }
     else panel.innerHTML = renderHistorial();
     attachHandlers();
   }
