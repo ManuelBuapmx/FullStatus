@@ -118,6 +118,11 @@ Ignorados por git: `node_modules/`, `dist/`, `android/`, `android-build/`, `*.lo
 ```
 npm run start:windows    # ventana de escritorio con Electron
 npm run dist:windows     # instalador de Windows (electron-builder)
+
+# Todo en uno (actualiza desde GitHub, instala dependencias, compila y abre el instalador):
+powershell -ExecutionPolicy Bypass -File .\actualizar.ps1
+# Solo probar la última versión sin instalar:
+powershell -ExecutionPolicy Bypass -File .\actualizar.ps1 -Probar
 ```
 
 > Mantén el proyecto fuera de carpetas sincronizadas con Google Drive: causan errores EPERM al compilar con electron-builder.
