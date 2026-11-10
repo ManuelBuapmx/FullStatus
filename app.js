@@ -124,6 +124,13 @@
   var currentTab = "pasar";
   var pasarFecha = todayISO();
   var pasarIndex = null;
+  // PRISMAL MESH: columna desplegable "Matrícula" de la lista completa del pase de lista.
+  // Muestra qué alumnos ya tienen matrícula en Supabase (coincidencia por nombre, la misma que usa
+  // la publicación de asistencias). Va PLEGADA por defecto para no estorbar al pasar lista; la
+  // elección se recuerda en este equipo. matPorGrupo[id del grupo] = { firma, estado, filas, msg }.
+  var matVisible = false;
+  try { matVisible = localStorage.getItem("fsMatriculasVisible") === "1"; } catch(e){}
+  var matPorGrupo = {};
   var pasarViewMode = "card";
   var pasarSegundaLista = null;
   var pasarSegundaIndex = null;
@@ -565,12 +572,62 @@
     return html;
   }
 
+  // Consulta a Supabase (solo lectura, solo admin) qué alumnos del grupo tienen matrícula.
+  async function cargarMatriculas(g){
+    var firma = g.estudiantes.map(function(e){ return e.id; }).join("|");
+    var api = window.FullStatusSupabase;
+    var entrada = { firma: firma, estado: "cargando", filas: {}, msg: "" };
+    matPorGrupo[g.id] = entrada;
+    try {
+      if(!api || !api.rpc){ entrada.estado = "error"; entrada.msg = "Falta cargar supabase-asistencias.js."; }
+      else if(!navigator.onLine){ entrada.estado = "sinConexion"; entrada.msg = "Sin conexión: la matrícula se consulta en línea."; }
+      else {
+        var res = await api.rpc("consultar_matriculas", {
+          p_grupo: g.grupoBase || g.nombre,
+          p_alumnos: g.estudiantes.map(function(e){ return {id: String(e.id), nombre: e.nombre}; })
+        });
+        if(res && res.sinSesion){ entrada.estado = "sinSesion"; entrada.msg = "Inicia sesión en ☁ Alumnos para ver las matrículas."; }
+        else { entrada.estado = "ok"; (res || []).forEach(function(f){ entrada.filas[f.id] = f; }); }
+      }
+    } catch(err){ entrada.estado = "error"; entrada.msg = "No se pudo consultar: " + (err && err.message || err); }
+    render();
+  }
+
   function renderPasarListaCompleta(g, bucket){
+    var cache = matPorGrupo[g.id];
+    var firmaActual = g.estudiantes.map(function(e){ return e.id; }).join("|");
+    // Si la columna está abierta y no hay datos (o cambió la lista de alumnos), se consulta una vez.
+    if(matVisible && (!cache || cache.firma !== firmaActual)){
+      cache = matPorGrupo[g.id] = { firma: firmaActual, estado: "cargando", filas: {}, msg: "" };
+      setTimeout(function(){ cargarMatriculas(g); }, 0);
+    }
     var html = '<div class="card">';
+    html += '<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px;">';
+    html += '<button class="link-sutil" id="btnToggleMatriculas" aria-expanded="'+(matVisible?"true":"false")+'">Matrícula '+(matVisible?"▾":"▸")+'</button>';
+    if(matVisible && cache){
+      if(cache.estado === "ok"){
+        var conM = 0, sinM = 0;
+        g.estudiantes.forEach(function(e){ var f = cache.filas[e.id]; if(f && f.estado === "ok") conM++; else sinM++; });
+        html += '<span class="helptext" style="margin:0;">'+conM+' con matrícula · '+sinM+' sin matrícula <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></span>';
+      } else if(cache.estado === "cargando"){
+        html += '<span class="helptext" style="margin:0;">Consultando matrículas…</span>';
+      } else {
+        html += '<span class="helptext" style="margin:0;">'+esc(cache.msg)+' <button class="link-sutil" id="btnRefrescarMatriculas">Reintentar</button></span>';
+      }
+    }
+    html += '</div>';
     html += '<table class="registro">';
     g.estudiantes.forEach(function(e, i){
       var v = bucket[e.id] || "";
       html += "<tr><td>"+(i+1)+". "+esc(e.nombre)+"</td>";
+      if(matVisible){
+        var f = cache && cache.estado === "ok" ? cache.filas[e.id] : null;
+        var celda = "";
+        if(f && f.estado === "ok") celda = esc(f.matricula);
+        else if(f && f.estado === "ambiguo") celda = '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
+        else if(f) celda = '<span style="color:var(--falta);">Sin matrícula</span>';
+        html += '<td class="helptext" style="white-space:nowrap;">'+celda+'</td>';
+      }
       html += '<td class="estados">';
       ESTADOS.forEach(function(code){
         html += '<span class="chip '+code+(v===code?" on":"")+'" data-chip data-estudiante="'+esc(e.id)+'" data-estado="'+code+'">'+ESTADO_VALOR_EXPORT[code]+"</span>";
@@ -2493,6 +2550,17 @@
       pasarSegundaLista = null;
       pasarSegundaIndex = null;
       render();
+    });
+    var btnToggleMat = document.getElementById("btnToggleMatriculas");
+    if(btnToggleMat) btnToggleMat.addEventListener("click", function(){
+      matVisible = !matVisible;
+      try { localStorage.setItem("fsMatriculasVisible", matVisible ? "1" : "0"); } catch(e){}
+      render();
+    });
+    var btnRefMat = document.getElementById("btnRefrescarMatriculas");
+    if(btnRefMat) btnRefMat.addEventListener("click", function(){
+      var g = grupoActivo();
+      if(g){ delete matPorGrupo[g.id]; render(); }
     });
     document.querySelectorAll("[data-chip]").forEach(function(chip){
       chip.addEventListener("click", function(){
