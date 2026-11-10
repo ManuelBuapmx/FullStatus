@@ -116,7 +116,9 @@
           return { nombre: String(u.nombre || ''), desde: u.desde, hasta: u.hasta };
         });
 
-      return { id: String(g.id), nombre: g.nombre || '', materia: g.materia || '', unidades: unidades, alumnos: alumnos };
+      // PRISMAL MESH: si el grupo tiene varias materias, "nombre" lleva la materia (nombre de la hoja de Excel);
+      // a Supabase se publica el grupo base (grupoBase, p. ej. "7B"), que es el que usa el servidor para desempatar homónimos.
+      return { id: String(g.id), nombre: g.grupoBase || g.nombre || '', materia: g.materia || '', unidades: unidades, alumnos: alumnos };
     });
 
     return { grupos: grupos };

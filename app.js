@@ -336,6 +336,13 @@
         html += '<div class="field"><label for="inputMateria">Materia (opcional)</label><input type="text" id="inputMateria" value="'+esc(g.materia||"")+'" placeholder="Ej. Inglés VIII"></div>';
         html += '<div class="field"><label for="inputProfesor">Profesor (opcional)</label><input type="text" id="inputProfesor" value="'+esc(g.profesor||"")+'" placeholder="Ej. Ing. José Manuel Robles"></div>';
         html += "</div>";
+        // PRISMAL MESH: un grupo con varias materias. Cada materia es una entrada propia (con sus
+        // asistencias, unidades, calificaciones y hoja de Excel) que comparte la lista de alumnos.
+        html += '<div class="meta-fields" style="margin-top:10px;">';
+        html += '<div class="field"><label for="inputOtraMateria">Agregar otra materia a este grupo</label><input type="text" id="inputOtraMateria" placeholder="Ej. Inglés VII"></div>';
+        html += '<div class="field" style="align-self:flex-end;"><button class="btn secondary" id="btnOtraMateria">Agregar materia</button></div>';
+        html += "</div>";
+        html += '<p class="helptext" style="margin-top:4px;">Copia a los alumnos de «'+esc(g.grupoBase || g.nombre)+'» en una entrada nueva con sus propias asistencias, unidades y calificaciones. Se publica en Supabase como el mismo grupo.</p>';
       }
     }
     html += "</div>";
@@ -1946,7 +1953,7 @@
           });
         });
       });
-      return {id: String(g.id), nombre: g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[modeloCalifId(g)], alumnos: alumnos};
+      return {id: String(g.id), nombre: g.grupoBase || g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[modeloCalifId(g)], alumnos: alumnos};
     })};
   };
   function refrescarTotalesCalif(){
@@ -2321,6 +2328,38 @@
       state.grupoActivoId = g.id;
       pasarIndex = null;
       saveState(); render();
+    });
+
+    // PRISMAL MESH: agrega otra materia a un grupo. Crea una entrada nueva {id, nombre, grupoBase,
+    // materia, profesor, estudiantes copiados con id nuevo}. "nombre" es también el nombre de la hoja
+    // del Excel institucional (único, máx. 31 caracteres, sin []*?/\:), así que lleva la materia:
+    // "7B · INGLÉS VII". "grupoBase" ("7B") es lo que se publica en Supabase como grupo.
+    var btnOtraMateria = document.getElementById("btnOtraMateria");
+    if(btnOtraMateria) btnOtraMateria.addEventListener("click", function(){
+      var input = document.getElementById("inputOtraMateria");
+      var materia = input.value.replace(/[\[\]\*\?\/\\:]/g, "").trim();
+      if(!materia){ showToast("Escribe el nombre de la materia."); return; }
+      var origen = grupoActivo();
+      if(!origen) return;
+      var base = origen.grupoBase || origen.nombre;
+      var candidato = (base + " · " + materia).slice(0, 31).trim();
+      var nombre = candidato, n = 2;
+      var existe = function(nom){ return state.grupos.some(function(x){ return x.nombre.trim().toLowerCase() === nom.toLowerCase(); }); };
+      while(existe(nombre)){ nombre = (candidato.slice(0, 28) + " " + n).slice(0, 31); n++; }
+      var nuevo = {
+        id: uid(),
+        nombre: nombre,
+        grupoBase: base,
+        materia: materia,
+        profesor: origen.profesor || "",
+        estudiantes: origen.estudiantes.map(function(est){ return Object.assign({}, est, {id: uid()}); })
+      };
+      state.hojasPorEliminar = (state.hojasPorEliminar || []).filter(function(h){ return h.trim().toLowerCase() !== nombre.toLowerCase(); });
+      state.grupos.push(nuevo);
+      state.grupoActivoId = nuevo.id;
+      pasarIndex = null;
+      saveState(); render();
+      showToast("Materia «" + materia + "» agregada a " + base + ". Su hoja del Excel se crea al actualizar en Drive.");
     });
 
     var btnAgregarEstudiante = document.getElementById("btnAgregarEstudiante");
