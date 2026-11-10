@@ -241,3 +241,11 @@ table.matriz.calif th{font-size:.74rem;}
 table.matriz.calif th small{display:block;font-weight:400;font-size:.62rem;}
 table.matriz.calif th:first-child,table.matriz.calif td:first-child{width:190px;max-width:190px;}
 table.matriz.calif input.calif-input{width:52px;min-height:24px;padding:1px 4px;font-size:.78rem;text-align:center;}
+
+/* --- Escuelas (pantalla de inicio y botón del encabezado) --- */
+ul.escuelas{list-style:none;margin:0 0 6px;padding:0;}
+ul.escuelas li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+ul.escuelas li:last-child{border-bottom:none;}
+ul.escuelas .escuela-entrar{flex:1 1 220px;text-align:left;font-weight:600;}
+.btn-escuela{background:transparent;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:var(--radius);padding:6px 12px;font-size:.8rem;cursor:pointer;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.btn-escuela:hover{border-color:var(--brand-accent);}

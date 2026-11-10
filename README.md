@@ -42,6 +42,8 @@ Aplicación web de una sola página, en JavaScript puro (sin framework ni bundle
 | `localStorage` `listaAsistenciaCambiosPendientes_v1` | `"1"` si hay cambios sin subir a Drive |
 | `localStorage` `listaAsistenciaDriveFileId_v1` | Id del archivo de Drive usado |
 | `localStorage` `listaAsistenciaGoogleDriveAuth_v3` | Marca de que ya se concedió permiso (evita pedir consentimiento otra vez) |
+| `localStorage` `fullstatusEscuelas_v1` | Lista de escuelas `[{id, nombre, driveFileId, original?}]`. La escuela `original` usa las claves de siempre; las demás agregan el sufijo `__<id>` a `listaAsistenciaData_v2`, `listaAsistenciaCambiosPendientes_v1`, `listaAsistenciaDriveFileId_v1` y a la clave `institucional` de IndexedDB |
+| `sessionStorage` `fullstatusEscuelaSesion_v1` | Id de la escuela elegida en esta sesión (si no existe, se muestra la pantalla de inicio) |
 | `localStorage` `listaAsistenciaCalificaciones_v1` | Calificaciones capturadas a mano: `{ grupoId: { _modelo?: "nuevo"\|"anterior", unidadId: { cols: { examen\|partic\|trab: { modo, max } }, alumnos: { estudianteId: { examen, partic, extra, trab } } } } }`. Solo viven en la app (no se sincronizan con Drive) |
 | `localStorage` `fullstatusExamenesBorrador_v1` | Borrador de la pestaña Exámenes: `{ texto, materiaId, modo }` (el script pegado, la materia elegida y "reemplazar"/"agregar"). Se guarda al escribir para no perderlo sin internet |
 | IndexedDB `integratorium_cache_v1` | Copia local del Excel institucional (`plantillaExcel`) para trabajar sin conexión; se restaura al iniciar con `restaurarCacheLocal` |
@@ -93,7 +95,7 @@ Pestaña **Exámenes** (`supabase-examenes.js`; `app.js` solo la llama desde `re
 - `guardarEnGoogleDrive` solo descarga el libro si no hay copia local (`plantillaExcel`) para no pisar ediciones locales; luego `crearBufferPlantillaInstitucional` escribe las marcas **solo del grupo activo** y se sube con PATCH.
 - Grupos nuevos: se clonan de la hoja "Plantilla" (`clonarHojaDesdePlantilla`); si no existe esa pestaña la creación falla con aviso.
 - Auto-sincronización: `autoSincronizarCambios` / `sincronizarPendientes` suben cuando hay internet y cambios pendientes.
-- Funciones clave en `app.js`: `extraerGrupoDeHoja`, `encontrarEncabezadoAlumno`, `limiteColumnaAsistencias`, `eliminarFechaDeHoja`, `renombrarFechaEnHoja`, `compactarColumnasVacias`, `construirMatrizActiva`, `descargarXlsxCompleto`, `faltasEquivalentes`, `totalAsistencias`, `resumenDia`.
+- Funciones clave en `app.js`: `extraerGrupoDeHoja`, `encontrarEncabezadoAlumno`, `limiteColumnaAsistencias`, `eliminarFechaDeHoja`, `renombrarFechaEnHoja`, `compactarColumnasVacias`, `construirMatrizActiva`, `descargarXlsxCompleto`, `faltasEquivalentes`, `totalAsistencias`, `resumenDia`; escuelas: `cargarEscuelas`, `sufijoEscuela`, `mostrarSelectorEscuelas`; resultados por escuela: `resEsDeEscuela`.
 
 ## Estructura
 
@@ -136,6 +138,15 @@ powershell -ExecutionPolicy Bypass -File .\actualizar.ps1 -Probar
 Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asistencia (se guarda como `1` con una nota en la celda).
 
 ## Historial de cambios
+
+### 2026-11-10 17:40 — Pantalla de inicio para elegir escuela; Resultados por escuela; arreglo de columna 0
+
+- **Nuevo (`app.js`, `styles.css`):** al abrir la app se muestra "¿En qué escuela vas a trabajar?" (`mostrarSelectorEscuelas`). Cada escuela tiene su propio estado, cambios pendientes, copia local del Excel (IndexedDB) y archivo de Drive. Se pueden agregar (nombre + enlace/ID del Excel en Drive), renombrar y quitar escuelas (quitar borra solo los datos locales y pide confirmación). Un botón con el nombre de la escuela en el encabezado vuelve a la pantalla de inicio (recarga la ventana). `GOOGLE_SHEET_ID` ahora sale de la escuela elegida.
+- **Compatibilidad:** la escuela `original` ("Escuela 1") conserva las claves de siempre sin sufijo, así que no hay migración ni se pierden datos; las demás usan las mismas claves con el sufijo `__<id>`. Las claves nuevas están en "Datos y persistencia".
+- **Resultados por escuela:** la pestaña Resultados solo muestra los resultados cuyo `grupo` coincide con el nombre de algún grupo de la escuela seleccionada (`resEsDeEscuela`, sin distinguir mayúsculas ni espacios extra). El selector de grupo y el de "Tipo de examen" solo listan lo que tiene resultados en esa escuela, y se indica cuántos resultados de otros grupos quedan ocultos. Solo lectura; no cambia Supabase.
+- **Falla corregida:** al sincronizar una hoja cuya columna `ALUMNO` es la primera (columna A), `crearBufferPlantillaInstitucional` leía `getCell(nameCol - 1)` con `nameCol = 1` (columna 0) y ExcelJS lanzaba "0 is out of bounds. Excel supports columns from 1 to 16384". La guarda correcta es `nameCol > 1`.
+- **No cambia (a propósito):** `supabase-asistencias.js` y `supabase-calificaciones.js` leen `localStorage.listaAsistenciaData_v2`, o sea solo la escuela original; no publican a FullStatus Student los grupos de otras escuelas. Se dejó así porque no se sabe cómo `publicar_asistencias` trata los grupos que no vienen en el envío (podría borrar los de otra escuela). La clave de calificaciones se comparte entre escuelas sin problema porque va por `grupoId`, que es único.
+- **Verificación:** `node --check app.js` y prueba con jsdom sobre el `index.html` real (pantalla de inicio, botón de escuela, aislamiento de grupos entre escuelas). **No se probó en Electron ni contra Drive/Supabase reales.**
 
 ### 2026-11-05 (noche) — Nueva pestaña "Exámenes": subir exámenes a FullStatus Student por script
 - **Qué:** nueva pestaña **Exámenes** para subir a Supabase los exámenes que los alumnos contestan en FullStatus Student, pegando el script de Apps Script para Forms que genera Gemini. Detalle de flujo, reglas y límites en la sección "Exámenes".
@@ -268,6 +279,10 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Pendientes conocidos
 
+- Escuelas: falta un botón "Cambiar archivo de Drive" (editar el enlace sin perder grupos; hoy hay que quitar y volver a agregar la escuela, lo que borra sus datos locales) y una protección que impida borrar pestañas cuando el Excel de la escuela no tiene `Plantilla`.
+- Escuelas y FullStatus Student: `supabase-asistencias.js` y `supabase-calificaciones.js` solo publican la escuela original; decidir cómo publicar varias escuelas (depende de cómo `publicar_asistencias` trata los grupos ausentes).
+- Resultados por escuela: se filtra por nombre de grupo; falta una columna `escuela` en Supabase para no depender de que los nombres coincidan ni de que no se repitan entre escuelas.
+
 - Exámenes: probar en Electron (iframe aislado, sesión compartida con "☁ Alumnos") y contra el Supabase real con una materia de prueba; no hay edición ni borrado de preguntas sueltas (se hace en admin.html); un fallo a la mitad de *Reemplazar* deja preguntas nuevas desactivadas que hay que activar o borrar en admin.html; el análisis ejecuta el script pegado (aislado, pero un ciclo infinito congelaría la ventana hasta que el tope de 10 s lo cancele, si el navegador lo permite).
 
 - Calificaciones: confirmar los nombres de las categorías del modelo nuevo, probar el PDF en Electron, exportar a Excel con el formato de CALIFICACIONES.xlsx y decidir si se sincroniza con Drive. Recompilar con `npm run dist:windows` para verificar que `preload.cjs` entra en el instalador.
@@ -286,6 +301,8 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 - Hacer commit de los cambios sin confirmar.
 
 ## Fallas y riesgos conocidos
+
+- **Excel de una escuela sin pestaña `Plantilla`:** al sincronizar, la app no puede crear la hoja de un grupo nuevo (avisa) y además elimina del archivo las pestañas de grupos quitados en la app (p. ej. una `Sheet1` vacía cargada como grupo). Si era la única pestaña, el archivo podría quedar sin hojas. Cada escuela debe usar una copia del Excel institucional con su `Plantilla`.
 
 - `npm run dist:windows` se verificó el 2026-10-08 (genera `dist/FullStatus Setup 1.0.0.exe`); tras retirar Android y Capacitor el 2026-10-09 aún no se ha vuelto a compilar.
 - No hay pruebas automatizadas (`npm test` ya no existe).
