@@ -26,9 +26,10 @@
    - Una materia nueva se crea DESACTIVADA; activarla y fijar su horario o asignaciones se sigue
      haciendo en el panel de administración (admin.html).
    - No usa alert()/confirm()/prompt() (Electron): la confirmación va dentro de la pestaña.
-   - DESTINO DEL EXAMEN = Materia + Unidad + Tipo (10/nov/2026). La materia sale de una lista:
-     las materias de inglés registradas en los grupos de FullStatus (window.FullStatusMateriasGrupos,
-     definida en app.js) y Ética. La unidad se guarda en preguntas.seccion como «Unidad N» (así
+   - DESTINO DEL EXAMEN = Materia + Unidad + Tipo (10/nov/2026). La materia sale de la tabla
+     `materias` de Supabase (las materias base, la misma lista que ve FullStatus Student; sin las
+     «Materia · Tipo»). Solo si esa tabla viene vacía se usan de respaldo las materias de inglés y
+     Ética de los grupos (window.FullStatusMateriasGrupos, definida en app.js). La unidad se guarda en preguntas.seccion como «Unidad N» (así
      arma FullStatus Student su menú). El tipo NO es una columna nueva: «Ordinario» usa la materia
      tal cual; Remedial y Extraordinario 1, 2 o 3 van a una materia aparte llamada
      «<Materia> · <Tipo>» (se crea desactivada). Así FullStatus Student, el horario/asignación de
@@ -546,15 +547,24 @@
   // Clave para comparar nombres: sin acentos ni mayúsculas, y «english» = «ingles» (en Supabase la
   // materia puede llamarse ENGLISH XI y en el grupo Inglés XI).
   function clave(s) { return normalizarTexto(s).replace(/english/g, 'ingles'); }
-  // Materias que ofrece la lista: las de inglés (y Ética) registradas en los grupos + Ética siempre.
+  // ¿Es una materia creada por esta pestaña para un tipo distinto de Ordinario («Materia · Remedial»...)?
+  function esMateriaDeTipo(nombre) {
+    var n = clave(nombre);
+    return TIPOS_EXAMEN.some(function (t) { return t !== 'Ordinario' && n.slice(-(clave(t).length + 3)) === ' \u00b7 ' + clave(t); });
+  }
+  // Materias que ofrece la lista: las MATERIAS BASE de Supabase (la misma lista que ve FullStatus Student:
+  // INGLES 1, INGLES VI, PEDAGOGIA, ETICA PROFESIONAL...), sin las «Materia · Tipo». Solo si la tabla
+  // está vacía o no se pudo leer se usan, de respaldo, las materias de inglés/Ética de los grupos.
   function materiasDisponibles() {
+    var base = est.materias.filter(function (m) { return !esMateriaDeTipo(m.nombre); }).map(function (m) { return m.nombre; });
+    if (base.length) return base;
     var lista = [], vistos = {}, grupos = [];
     try { if (typeof window.FullStatusMateriasGrupos === 'function') grupos = window.FullStatusMateriasGrupos() || []; } catch (e) { grupos = []; }
     grupos.forEach(function (m) {
       var k = clave(m);
       if ((/ingles/.test(k) || /etica/.test(k)) && !vistos[k]) { vistos[k] = true; lista.push(m); }
     });
-    if (!vistos[clave('Ética')]) lista.push('Ética');
+    if (!lista.length) lista.push('\u00c9tica profesional');
     return lista;
   }
   function asegurarMateria() {
@@ -657,8 +667,11 @@
     }
     return h('div', { 'class': 'card' }, [
       h('h2', { text: 'Destino del examen' }),
-      h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'La materia sale de tus grupos (inglés) más Ética. Las preguntas se guardan en la unidad elegida. El tipo Ordinario usa la materia tal cual; Remedial y Extraordinario 1, 2 o 3 se guardan en una materia aparte «Materia · Tipo», para que cada examen tenga su propio horario y sus propios resultados.' }),
-      campoSelect('exaMateria', 'Materia', materiasDisponibles().map(function (m) { return { valor: m, texto: m }; }), est.materiaNombre, function (v) { cambio('materiaNombre', v); }),
+      h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'La materia sale de la misma lista que ve FullStatus Student. Las preguntas se guardan en la unidad elegida. El tipo Ordinario usa la materia tal cual; Remedial y Extraordinario 1, 2 o 3 se guardan en una materia aparte «Materia · Tipo», para que cada examen tenga su propio horario y sus propios resultados.' }),
+      campoSelect('exaMateria', 'Materia', materiasDisponibles().map(function (m) {
+        var fila = est.materias.find(function (x) { return x.nombre === m; });
+        return { valor: m, texto: m + (fila && !fila.activa ? ' (desactivada)' : '') };
+      }), est.materiaNombre, function (v) { cambio('materiaNombre', v); }),
       campoSelect('exaUnidad', 'Unidad', unidades, est.unidad, function (v) { cambio('unidad', v); }),
       campoSelect('exaTipo', 'Tipo de examen', TIPOS_EXAMEN.map(function (t) { return { valor: t, texto: t }; }), est.tipo, function (v) { cambio('tipo', v); }),
       info ? h('p', { 'class': 'helptext', text: info }) : null
