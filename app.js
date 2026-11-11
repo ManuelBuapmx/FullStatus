@@ -247,6 +247,7 @@
   var matVisible = false;
   try { matVisible = localStorage.getItem("fsMatriculasVisible") === "1"; } catch(e){}
   var matPorGrupo = {};
+  var cuentasAbierto = false;   // sección «Cuentas de alumnos» (contraseña) desplegada; usa los mismos datos que la columna Matrícula
   // PRISMAL MESH: el Historial también tiene la columna "Matrícula" (misma consulta y mismo botón
   // plegable que Pasar lista) y un filtro para ver solo los que no tienen: "todos" | "sin" | "con".
   var matFiltro = "todos";
@@ -477,6 +478,8 @@
       }
     }
     html += "</div>";
+
+    html += renderCuentasAlumnos(grupoActivo());
 
     html += '<div class="card">';
     html += "<h2>Crear un grupo manualmente</h2>";
@@ -798,6 +801,56 @@
     if(f && f.estado === "ambiguo") return '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
     if(f) return '<span style="color:var(--falta);">Sin matrícula</span>';
     return "";
+  }
+
+  // PRISMAL MESH: sección plegable «Cuentas de alumnos» (pestaña Grupos). Por alumno del grupo activo dice si su
+  // cuenta de FullStatus Student ya tiene contraseña, si el registro está habilitado o si está bloqueada, y deja
+  // restablecer la contraseña (la borra y habilita crear otra) o habilitar el registro. Los datos vienen de
+  // consultar_matriculas (solo admin), la misma consulta de la columna Matrícula.
+  function renderCuentasAlumnos(g){
+    if(!g || !g.estudiantes || !g.estudiantes.length) return "";
+    var cache = matPorGrupo[g.id];
+    var firma = g.estudiantes.map(function(e){ return e.id; }).join("|");
+    if(cuentasAbierto && (!cache || cache.firma !== firma)){
+      cache = matPorGrupo[g.id] = { firma: firma, estado: "cargando", filas: {}, msg: "" };
+      setTimeout(function(){ cargarMatriculas(g); }, 0);
+    }
+    var html = '<details class="card" id="detCuentas"'+(cuentasAbierto ? " open" : "")+'><summary style="cursor:pointer;font-weight:700;">Cuentas de alumnos (contraseña) · '+esc(g.nombre)+'</summary>';
+    if(!cuentasAbierto) return html + "</details>";
+    if(!cache || cache.estado === "cargando") return html + '<p class="helptext">Consultando cuentas…</p></details>';
+    if(cache.estado !== "ok") return html + '<p class="helptext">'+esc(cache.msg)+' <button class="link-sutil" id="btnRefrescarCuentas">Reintentar</button></p></details>';
+    var con = 0, sin = 0, porHabilitar = [];
+    var filas = "";
+    g.estudiantes.forEach(function(e, i){
+      var f = cache.filas[e.id], cuenta = "", accion = "";
+      if(f && f.estado === "ok"){
+        if(f.tiene_password){
+          con++;
+          cuenta = '<span style="color:var(--presente);font-weight:600;">Con contraseña</span>';
+          accion = '<button class="link-sutil" data-reset-pass="'+esc(f.matricula)+'" data-nombre="'+esc(e.nombre)+'">Restablecer contraseña</button>';
+        } else {
+          sin++;
+          if(f.puede_crear){
+            cuenta = '<span style="color:var(--retardo);font-weight:600;">Sin contraseña</span> · registro habilitado';
+            accion = '<button class="link-sutil" data-hab-pass="'+esc(f.matricula)+'" data-valor="0">Cerrar registro</button>';
+          } else {
+            cuenta = '<span style="color:var(--falta);font-weight:600;">Sin contraseña</span> · registro cerrado';
+            accion = '<button class="link-sutil" data-hab-pass="'+esc(f.matricula)+'" data-valor="1">Habilitar registro</button>';
+            porHabilitar.push(f.matricula);
+          }
+        }
+        if(f.bloqueado) cuenta += ' · <b>bloqueada por intentos fallidos</b>';
+      } else {
+        cuenta = '<span class="helptext" style="margin:0;">Sin matrícula en Supabase</span>';
+      }
+      filas += '<tr><td>'+(i+1)+'. '+esc(e.nombre)+'</td><td class="helptext" style="white-space:nowrap;">'+esc(f && f.matricula ? f.matricula : "")+'</td><td>'+cuenta+'</td><td>'+accion+'</td></tr>';
+    });
+    html += '<div class="row" style="justify-content:space-between;align-items:center;">';
+    html += '<span class="helptext" style="margin:0;">'+con+' con contraseña · '+sin+' sin contraseña <button class="link-sutil" id="btnRefrescarCuentas">Actualizar</button></span>';
+    if(porHabilitar.length) html += '<button class="btn secondary" id="btnHabilitarTodos" data-matriculas="'+esc(porHabilitar.join(","))+'">Habilitar registro a los '+porHabilitar.length+' sin contraseña</button>';
+    html += '</div><div class="table-scroll"><table class="registro"><tbody>'+filas+'</tbody></table></div>';
+    html += '<p class="helptext">«Restablecer» borra la contraseña del alumno y le deja crear una nueva desde la app. Un alumno sin contraseña solo puede crearla si su registro está habilitado.</p></details>';
+    return html;
   }
 
   function renderPasarListaCompleta(g, bucket){
@@ -3031,6 +3084,48 @@
           saveState(); render();
           showToast("Nombre corregido. Publica de nuevo con ☁ Alumnos para subir sus asistencias.");
         });
+      });
+    });
+    var detCuentas = document.getElementById("detCuentas");
+    if(detCuentas) detCuentas.addEventListener("toggle", function(){
+      if(detCuentas.open !== cuentasAbierto){ cuentasAbierto = detCuentas.open; render(); }
+    });
+    var btnRefCuentas = document.getElementById("btnRefrescarCuentas");
+    if(btnRefCuentas) btnRefCuentas.addEventListener("click", function(){
+      var g = grupoActivo(); if(g){ delete matPorGrupo[g.id]; render(); }
+    });
+    // Llama a una función de Supabase con la sesión de administrador y refresca la sección.
+    async function accionCuentas(nombreRpc, cuerpo, aviso){
+      var g = grupoActivo();
+      try {
+        var api = window.FullStatusSupabase;
+        if(!api || !api.rpc) throw new Error("Falta cargar supabase-asistencias.js.");
+        var res = await api.rpc(nombreRpc, cuerpo);
+        if(res && res.sinSesion) throw new Error("Inicia sesión en ☁ Alumnos (administrador).");
+        if(g) delete matPorGrupo[g.id];
+        render();
+        showToast(aviso);
+      } catch(err){ showToast(err.message || "No se pudo completar la acción."); }
+    }
+    document.querySelectorAll("[data-reset-pass]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var matricula = b.getAttribute("data-reset-pass"), nombre = b.getAttribute("data-nombre");
+        confirmar("Restablecer la contraseña de " + nombre + " (" + matricula + "). Se borra su contraseña actual y podrá crear una nueva desde la app. ¿Continuar?", function(){
+          accionCuentas("restablecer_contrasena", { p_matricula: matricula }, "Contraseña de " + nombre + " restablecida: ya puede crear una nueva.");
+        });
+      });
+    });
+    document.querySelectorAll("[data-hab-pass]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var habilitar = b.getAttribute("data-valor") === "1";
+        accionCuentas("habilitar_registro", { p_matriculas: [b.getAttribute("data-hab-pass")], p_habilitar: habilitar }, habilitar ? "Registro habilitado." : "Registro cerrado.");
+      });
+    });
+    var btnHabTodos = document.getElementById("btnHabilitarTodos");
+    if(btnHabTodos) btnHabTodos.addEventListener("click", function(){
+      var lista = btnHabTodos.getAttribute("data-matriculas").split(",");
+      confirmar("Habilitar el registro de contraseña a " + lista.length + " alumno(s) sin contraseña de este grupo. ¿Continuar?", function(){
+        accionCuentas("habilitar_registro", { p_matriculas: lista, p_habilitar: true }, "Registro habilitado a " + lista.length + " alumno(s).");
       });
     });
     var btnRefMat = document.getElementById("btnRefrescarMatriculas");
