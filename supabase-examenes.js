@@ -30,11 +30,11 @@
      `materias` de Supabase (las materias base, la misma lista que ve FullStatus Student; sin las
      «Materia · Tipo»). Solo si esa tabla viene vacía se usan de respaldo las materias de inglés y
      Ética de los grupos (window.FullStatusMateriasGrupos, definida en app.js). La unidad se guarda en preguntas.seccion como «Unidad N» (así
-     arma FullStatus Student su menú). El tipo NO es una columna nueva: «Ordinario» usa la materia
-     tal cual; Remedial y Extraordinario 1, 2 o 3 van a una materia aparte llamada
-     «<Materia> · <Tipo>» (se crea activa). Así FullStatus Student, el horario/asignación de
-     admin.html y la pestaña Resultados (que ya muestra el nombre de la materia como «Tipo de examen»)
-     funcionan sin cambios ni migraciones en la base.
+     arma FullStatus Student su menú). CADA UNIDAD tiene su propio Ordinario, Remedial y Extraordinarios (11/nov/2026): cada combinación es su propia
+     fila de `materias`, nombrada «<Materia> · Unidad N» (Ordinario) o «<Materia> · Unidad N · <Tipo>» (Remedial,
+     Extraordinario 1, 2 o 3), y se crea activa. El tipo NO es una columna nueva: el servidor lo reconoce por el nombre
+     y arma la cadena por unidad (mis_examenes / _elegible_siguiente_examen). FullStatus Student, el horario/asignación de
+     admin.html y la pestaña Resultados (que muestra el nombre como «Tipo de examen») funcionan sin migraciones.
    - Reemplazar solo desactiva las preguntas ACTIVAS DE LA MISMA UNIDAD; las otras unidades no se tocan.
    - Cada examen (unidad de una materia/tipo) es independiente y su numeración empieza en 1. Si la
      unidad todavía no tiene preguntas activas no se pregunta nada (no hay qué reemplazar); la opción
@@ -551,6 +551,7 @@
   // ¿Es una materia creada por esta pestaña para un tipo distinto de Ordinario («Materia · Remedial»...)?
   function esMateriaDeTipo(nombre) {
     var n = clave(nombre);
+    if (/ unidad [0-9]+/.test(n)) return true;   // «Materia · Unidad N» y «Materia · Unidad N · Tipo» son exámenes, no materias base
     return TIPOS_EXAMEN.some(function (t) { return t !== 'Ordinario' && n.slice(-(clave(t).length + 3)) === ' \u00b7 ' + clave(t); });
   }
   // Materias que ofrece la lista: las MATERIAS BASE de Supabase (la misma lista que ve FullStatus Student:
@@ -573,7 +574,11 @@
     if (op.indexOf(est.materiaNombre) < 0) est.materiaNombre = op[0] || '';
   }
   // Ordinario usa la materia tal cual; los demás tipos van a «<Materia> · <Tipo>».
-  function nombreDestino() { return est.tipo === 'Ordinario' ? est.materiaNombre : est.materiaNombre + ' \u00b7 ' + est.tipo; }
+  // PRISMAL MESH (11/nov/2026): cada unidad tiene su propio Ordinario, Remedial y Extraordinarios, así que
+  // cada uno es su propia fila en `materias`: «INGLÉS VI · Unidad 1» (Ordinario), «INGLÉS VI · Unidad 1 · Remedial»,
+  // «INGLÉS VI · Unidad 1 · Extraordinario 2»... Con ese nombre el servidor arma la cadena Ordinario → Remedial →
+  // Extraordinarios por unidad (solo aparece el siguiente si el alumno reprueba la unidad).
+  function nombreDestino() { return est.materiaNombre + ' \u00b7 Unidad ' + est.unidad + (est.tipo === 'Ordinario' ? '' : ' \u00b7 ' + est.tipo); }
   function seccionDestino() { return 'Unidad ' + est.unidad; }
   function buscarDestino() {
     var k = clave(nombreDestino());
