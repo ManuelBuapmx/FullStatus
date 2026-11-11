@@ -515,7 +515,8 @@
     existentes: null,                         // preguntas de la materia destino (id, orden, activa, texto, seccion)
     texto: borrador.texto || '', modo: borrador.modo === 'agregar' ? 'agregar' : 'reemplazar',
     preview: null, avisos: [],
-    ocupado: '', msg: '', err: '', confirmando: false
+    ocupado: '', msg: '', err: '', confirmando: false,
+    adminAbierto: false, eliminando: null     // sección «Administrar exámenes»: ¿desplegada? y id de la materia por eliminar
   };
   var raiz = null; // contenedor de esta pestaña; si ya no está en pantalla (cambió de pestaña) no se dibuja nada
   function guardarBorrador() {
@@ -534,7 +535,7 @@
   }
 
   function cargarMaterias() {
-    return rest('materias?select=id,nombre,activa,orden&order=orden.asc').then(function (filas) { est.materias = filas || []; });
+    return rest('materias?select=id,nombre,activa,orden,abre_en,cierra_en,solo_asignados&order=orden.asc').then(function (filas) { est.materias = filas || []; });
   }
   // Solo se leen id, orden, activa, texto y seccion: NUNCA la respuesta correcta.
   function cargarExistentes(mid) {
@@ -801,6 +802,99 @@
     return h('div', { 'class': 'card' }, partes);
   }
 
+  // --- Administrar exámenes: fechas de apertura y cierre, activar/desactivar y eliminar -----------
+  // PRISMAL MESH. Cada fila es una materia de Supabase («INGLÉS VI», «INGLÉS VI · Remedial»...). Las
+  // fechas se editan en hora LOCAL de esta computadora y se guardan en UTC (abre_en / cierra_en). Con
+  // asignación manual de un alumno (asignaciones) sus propias fechas mandan sobre estas.
+  function dosDig(n) { return String(n).length < 2 ? '0' + n : String(n); }
+  function aLocal(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.getFullYear() + '-' + dosDig(d.getMonth() + 1) + '-' + dosDig(d.getDate()) + 'T' + dosDig(d.getHours()) + ':' + dosDig(d.getMinutes());
+  }
+  function deLocal(v) { if (!v) return null; var d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString(); }
+  function textoFecha(iso) { return iso ? new Date(iso).toLocaleString('es-MX') : 'sin límite'; }
+  function estadoDeMateria(m) {
+    if (!m.activa) return 'Desactivado';
+    var ahora = Date.now();
+    if (m.abre_en && ahora < new Date(m.abre_en).getTime()) return 'Programado';
+    if (m.cierra_en && ahora >= new Date(m.cierra_en).getTime()) return 'Cerrado';
+    return 'Abierto';
+  }
+  // Guarda cambios de UNA materia y repinta. "cambios" son columnas de la tabla materias.
+  function guardarMateria(m, cambios, aviso) {
+    est.ocupado = 'Guardando...'; est.err = ''; est.msg = ''; pintar();
+    return escribirConfirmado(rest, 'materias?select=id&id=eq.' + Number(m.id), 'PATCH', cambios, 1)
+      .then(function () { for (var k in cambios) m[k] = cambios[k]; est.ocupado = ''; est.msg = aviso; pintar(); })
+      .catch(function (e) { fallo(e, 'No se pudo guardar: '); });
+  }
+  // Elimina una materia SIN resultados: antes se borran sus intentos y preguntas. Si ya tiene resultados
+  // de alumnos NO se elimina (se perdería el vínculo del resultado con su examen): se pide desactivarla.
+  function eliminarMateria(m) {
+    var id = Number(m.id);
+    est.ocupado = 'Eliminando...'; est.err = ''; est.msg = ''; est.eliminando = null; pintar();
+    return rest('resultados?select=id&materia_id=eq.' + id + '&limit=1').then(function (r) {
+      if (Array.isArray(r) && r.length) throw new Error('«' + m.nombre + '» ya tiene resultados de alumnos y no se elimina para no perderlos. Desactívala en su lugar.');
+      return rest('intentos?select=id&materia_id=eq.' + id, { method: 'DELETE' });
+    }).then(function () {
+      return rest('preguntas?select=id&materia_id=eq.' + id, { method: 'DELETE' });
+    }).then(function () {
+      return escribirConfirmado(rest, 'materias?select=id&id=eq.' + id, 'DELETE', undefined, 1);
+    }).then(function () {
+      est.materias = est.materias.filter(function (x) { return x.id !== m.id; });
+      if (String(est.materiaId) === String(id)) { est.materiaId = ''; est.existentes = null; }
+      est.msg = '«' + m.nombre + '» se eliminó junto con sus preguntas.';
+      return refrescar();
+    }).catch(function (e) { fallo(e, 'No se pudo eliminar: '); });
+  }
+  function filaAdministrar(m) {
+    var abre = h('input', { type: 'datetime-local', id: 'admAbre' + m.id, value: aLocal(m.abre_en) });
+    var cierra = h('input', { type: 'datetime-local', id: 'admCierra' + m.id, value: aLocal(m.cierra_en) });
+    var solo = h('input', { type: 'checkbox', id: 'admSolo' + m.id }); solo.checked = !!m.solo_asignados;
+    var estado = estadoDeMateria(m);
+    var acciones = [
+      boton('Guardar fechas', '', function () {
+        var a = deLocal(abre.value), c = deLocal(cierra.value);
+        if (a && c && new Date(c) <= new Date(a)) { est.err = 'El cierre de «' + m.nombre + '» debe ser posterior a la apertura.'; est.msg = ''; pintar(); return; }
+        guardarMateria(m, { abre_en: a, cierra_en: c, solo_asignados: solo.checked }, 'Fechas de «' + m.nombre + '» guardadas.');
+      }),
+      boton('Quitar fechas', 'secondary', function () { guardarMateria(m, { abre_en: null, cierra_en: null }, '«' + m.nombre + '» quedó sin fechas de apertura ni cierre.'); }),
+      boton(m.activa ? 'Desactivar' : 'Activar', 'secondary', function () { guardarMateria(m, { activa: !m.activa }, '«' + m.nombre + '» ' + (m.activa ? 'desactivada' : 'activada') + '.'); }),
+      boton('Eliminar', 'secondary', function () { est.eliminando = m.id; pintar(); })
+    ];
+    var partes = [
+      h('div', { 'class': 'row', style: 'justify-content:space-between;align-items:center' }, [
+        h('b', { text: m.nombre }),
+        h('span', { 'class': 'helptext', style: 'margin:0', text: estado + ' · abre: ' + textoFecha(m.abre_en) + ' · cierra: ' + textoFecha(m.cierra_en) })
+      ]),
+      h('div', { 'class': 'row' }, [
+        h('div', { 'class': 'field' }, [h('label', { 'for': 'admAbre' + m.id, text: 'Apertura' }), abre]),
+        h('div', { 'class': 'field' }, [h('label', { 'for': 'admCierra' + m.id, text: 'Cierre' }), cierra]),
+        h('div', { 'class': 'field' }, [h('label', { 'for': 'admSolo' + m.id, text: 'Solo alumnos asignados' }), solo])
+      ]),
+      h('div', { 'class': 'row' }, acciones)
+    ];
+    if (est.eliminando === m.id) {
+      partes.push(h('p', { style: 'color:var(--falta);margin:8px 0 4px', text: '¿Eliminar «' + m.nombre + '»? Se borran sus preguntas. Si ya tiene resultados de alumnos no se elimina.' }));
+      partes.push(h('div', { 'class': 'row' }, [
+        boton('Sí, eliminar', '', function () { eliminarMateria(m); }),
+        boton('Cancelar', 'secondary', function () { est.eliminando = null; pintar(); })
+      ]));
+    }
+    return h('div', { style: 'border-top:1px solid var(--borde, #e0e0e0);padding:10px 0' }, partes);
+  }
+  function vistaAdministrar() {
+    var det = h('details', { 'class': 'card' });
+    if (est.adminAbierto) det.setAttribute('open', '');
+    det.addEventListener('toggle', function () { est.adminAbierto = det.open; });
+    det.appendChild(h('summary', { style: 'cursor:pointer;font-weight:700', text: 'Administrar exámenes (fechas, activar, eliminar) · ' + est.materias.length }));
+    det.appendChild(h('p', { 'class': 'helptext', text: 'Programa cuándo se abre y se cierra cada examen (hora de esta computadora), actívalo o desactívalo, o elimínalo. Si asignas un examen a un alumno en el panel de administración, las fechas de esa asignación mandan.' }));
+    if (!est.materias.length) det.appendChild(h('p', { 'class': 'empty', text: 'Todavía no hay exámenes en Supabase.' }));
+    est.materias.slice().sort(function (a, b) { return (a.orden || 0) - (b.orden || 0); }).forEach(function (m) { det.appendChild(filaAdministrar(m)); });
+    return det;
+  }
+
   // Repinta TODA la pestaña. El texto del script se conserva porque cada tecla lo guarda en est.texto.
   // Si el profesor ya cambió de pestaña, una respuesta tardía de la red NO debe pintar encima.
   function pintar() {
@@ -812,6 +906,7 @@
     if (est.err) raiz.appendChild(h('p', { style: 'color:var(--falta);white-space:pre-wrap', text: est.err }));
     if (!haySesion()) return;
     if (navigator.onLine === false) raiz.appendChild(h('p', { 'class': 'helptext', text: 'Sin conexión: puedes pegar y analizar el script; subirlo requiere internet.' }));
+    raiz.appendChild(vistaAdministrar());
     raiz.appendChild(vistaMateria());
     raiz.appendChild(vistaScript());
     if (est.preview) { raiz.appendChild(vistaPrevia()); raiz.appendChild(vistaSubida()); }

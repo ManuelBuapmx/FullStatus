@@ -2715,21 +2715,23 @@
       var f = resDatos && resDatos.filas.find(function(x){ return String(x.id) === id; });
       if(!f) return;
       var examen = resDatos.nombres[f.materia_id] || "este examen";
-      if(!window.confirm("Reactivar el examen de " + (f.nombre || f.matricula) + ":\n\n" + examen + "\nResultado actual: " + f.correctas + " / " + f.total +
-        "\n\nSe borra ese resultado y podrá contestarlo de nuevo desde cero. El resultado anterior queda guardado en el servidor.\n\n¿Reactivar?")) return;
-      b.disabled = true;
-      try {
-        var api = window.FullStatusSupabase;
-        if(!api || !api.rpc) throw new Error("Falta cargar supabase-asistencias.js.");
-        var res = await api.rpc("reactivar_examen", { p_resultado_id: Number(id) });
-        if(res && res.sinSesion) throw new Error("Inicia sesión en ☁ Alumnos (administrador) para reactivar.");
-        resDatos.filas = resDatos.filas.filter(function(x){ return String(x.id) !== id; });
-        resTablaEl.innerHTML = htmlTablaResultados();
-        showToast("Examen reactivado: " + (f.nombre || f.matricula) + " ya puede contestarlo de nuevo.");
-      } catch(err){
-        b.disabled = false;
-        showToast(err.message || "No se pudo reactivar el examen.");
-      }
+      // confirmar() es el cuadro propio de la app: el confirm() nativo deja sin foco los campos en Electron.
+      confirmar("Reactivar el examen de " + (f.nombre || f.matricula) + " (" + examen + ", resultado " + f.correctas + " / " + f.total +
+        "). Se borra ese resultado y podrá contestarlo de nuevo desde cero; el resultado anterior queda guardado en el servidor. ¿Reactivar?", async function(){
+        b.disabled = true;
+        try {
+          var api = window.FullStatusSupabase;
+          if(!api || !api.rpc) throw new Error("Falta cargar supabase-asistencias.js.");
+          var res = await api.rpc("reactivar_examen", { p_resultado_id: Number(id) });
+          if(res && res.sinSesion) throw new Error("Inicia sesión en ☁ Alumnos (administrador) para reactivar.");
+          resDatos.filas = resDatos.filas.filter(function(x){ return String(x.id) !== id; });
+          resTablaEl.innerHTML = htmlTablaResultados();
+          showToast("Examen reactivado: " + (f.nombre || f.matricula) + " ya puede contestarlo de nuevo.");
+        } catch(err){
+          b.disabled = false;
+          showToast(err.message || "No se pudo reactivar el examen.");
+        }
+      });
     });
     var btnResActualizar = document.getElementById("btnResActualizar");
     if(btnResActualizar) btnResActualizar.addEventListener("click", cargarResultados);
@@ -3022,11 +3024,13 @@
         var est = g && g.estudiantes.find(function(x){ return String(x.id) === b.getAttribute("data-usar-nombre"); });
         var f = est && matPorGrupo[g.id] && matPorGrupo[g.id].filas[est.id];
         if(!est || !f || !f.nombre_sugerido) return;
-        if(!window.confirm("Cambiar el nombre en FullStatus:\n\n«" + est.nombre + "»  →  «" + f.nombre_sugerido + "»\n\nAsí coincidirá con su matrícula " + f.matricula + ". Si ya subiste el Excel a Drive, revisa esa fila después de actualizar.")) return;
-        est.nombre = f.nombre_sugerido;
-        delete matPorGrupo[g.id];
-        saveState(); render();
-        showToast("Nombre corregido. Publica de nuevo con ☁ Alumnos para subir sus asistencias.");
+        confirmar("Cambiar el nombre en FullStatus: «" + est.nombre + "» → «" + f.nombre_sugerido + "». Así coincidirá con su matrícula " + f.matricula +
+          ". Si ya subiste el Excel a Drive, revisa esa fila después de actualizar.", function(){
+          est.nombre = f.nombre_sugerido;
+          delete matPorGrupo[g.id];
+          saveState(); render();
+          showToast("Nombre corregido. Publica de nuevo con ☁ Alumnos para subir sus asistencias.");
+        });
       });
     });
     var btnRefMat = document.getElementById("btnRefrescarMatriculas");
