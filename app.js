@@ -2120,6 +2120,13 @@
   ];
   var califDatos = cargarCalificaciones();
   var calUnidad = "";
+  // PRISMAL MESH: calificación del examen que se rellena sola. Lee de Supabase (misma sesión de administrador)
+  // los resultados de los exámenes que contestaron los alumnos en FullStatus Student y los pasa a la columna
+  // «Exámen» de la unidad, en el modo de captura de esa columna (0-10, % o escala). Los puntos con su
+  // ponderación (3 o 2 pts según el modelo) los calcula calcularCalificaciones como con cualquier captura.
+  // examAuto = { estado: "idle"|"cargando"|"ok"|"sinSesion"|"sinConexion"|"error", filas, nombres, unidadesMateria, ts, msg }
+  var examAuto = {estado:"idle", filas:[], nombres:{}, unidadesMateria:{}, ts:0, msg:""};
+  var EXAM_AUTO_VIGENCIA_MS = 120000;   // cuánto se reutiliza la consulta antes de volver a pedirla
 
   function cargarCalificaciones(){
     try{
@@ -2266,6 +2273,153 @@
       return {id: String(g.id), nombre: g.grupoBase || g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[modeloCalifId(g)], alumnos: alumnos};
     })};
   };
+  // ---- Examen automático (ver comentario de examAuto) ----
+  // Mismo criterio que el servidor (_clave_nombre): minúsculas, sin acentos ni signos.
+  function claveTexto(t){
+    return String(t == null ? "" : t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  var EXAM_TIPOS = ["", "Ordinario", "Remedial", "Extraordinario", "Extraordinario 2", "Extraordinario 3"];
+  // Del nombre de la materia del examen («INGLÉS VI Unidad 1», «INGLÉS VI · Remedial»…) saca la materia base,
+  // la unidad (si el nombre la trae) y el tipo (1 ordinario, 2 remedial, 3 extraordinario, 4 y 5 extraordinario 2 y 3).
+  function infoExamen(nombre){
+    var k = claveTexto(nombre);
+    var mu = k.match(/\bunidad ?(\d+)\b/);
+    var rango = /\bextraordinario (3|iii|tres)\b/.test(k) ? 5 : /\bextraordinario (2|ii|dos)\b/.test(k) ? 4
+              : /\bextraordinario\b/.test(k) ? 3 : /\bremedial\b/.test(k) ? 2 : 1;
+    var base = k.replace(/\b(extraordinario( (2|3|ii|iii|dos|tres))?|remedial|ordinario|unidad ?\d+)\b/g, " ").replace(/\s+/g, " ").trim();
+    return {base: base, unidad: mu ? parseInt(mu[1], 10) : null, rango: rango};
+  }
+  // Número de la unidad: el del nombre («Unidad 2») o, si no lo trae, su posición en el grupo.
+  function numeroUnidadCalif(g, unidad){
+    var m = String(unidad.nombre || "").match(/unidad\s*(\d+)/i);
+    if(m) return parseInt(m[1], 10);
+    var i = unidadesDelGrupo(g).findIndex(function(u){ return u.id === unidad.id; });
+    return i + 1;
+  }
+  async function cargarExamenesAuto(){
+    if(examAuto.estado === "cargando") return;
+    var api = window.FullStatusSupabase;
+    examAuto.ts = Date.now();
+    if(!api || !api.rest){ examAuto.estado = "error"; examAuto.msg = "Falta cargar supabase-asistencias.js."; render(); return; }
+    if(!navigator.onLine){ examAuto.estado = "sinConexion"; examAuto.msg = "Sin conexión: los exámenes se consultan en línea."; render(); return; }
+    examAuto.estado = "cargando";
+    try{
+      var materias = await api.rest("materias?select=id,nombre");
+      if(materias && materias.sinSesion){
+        examAuto.estado = "sinSesion"; examAuto.msg = "Inicia sesión en ☁ Alumnos (administrador) para traer las calificaciones de los exámenes.";
+      } else {
+        var filas = await api.rest("resultados?select=matricula,nombre,correctas,total,materia_id,creado_en&order=creado_en.desc&limit=3000");
+        // Solo materia y sección de las preguntas activas (NUNCA la respuesta correcta): sirve para saber la unidad
+        // de un examen cuya materia no lleva «Unidad N» en el nombre.
+        var preg = [];
+        try{ preg = await api.rest("preguntas?select=materia_id,seccion&activa=eq.true&limit=10000"); }catch(e2){ preg = []; }
+        var nombres = {}, unidadesMateria = {};
+        (Array.isArray(materias) ? materias : []).forEach(function(m){ nombres[m.id] = m.nombre; });
+        (Array.isArray(preg) ? preg : []).forEach(function(q){
+          var mm = String(q.seccion || "").match(/unidad\s*(\d+)/i);
+          if(q.materia_id != null && mm){ (unidadesMateria[q.materia_id] = unidadesMateria[q.materia_id] || {})[parseInt(mm[1], 10)] = true; }
+        });
+        examAuto.filas = Array.isArray(filas) ? filas : [];
+        examAuto.nombres = nombres;
+        examAuto.unidadesMateria = unidadesMateria;
+        examAuto.estado = "ok"; examAuto.msg = "";
+      }
+    }catch(err){
+      examAuto.estado = "error"; examAuto.msg = "No se pudieron traer los exámenes: " + (err && err.message || err);
+    }
+    render();
+  }
+  // Consulta una vez y la repite solo si pasó la vigencia (no en cada dibujo de la pantalla).
+  function asegurarExamenesAuto(){
+    if(examAuto.estado === "cargando") return;
+    if(examAuto.estado === "idle" || Date.now() - examAuto.ts > EXAM_AUTO_VIGENCIA_MS){
+      setTimeout(cargarExamenesAuto, 0);
+    }
+  }
+  // Rellena la columna «Exámen» de la unidad con el resultado del examen de cada alumno:
+  //  - Solo cuenta el examen de la MISMA materia y unidad (la unidad sale del nombre de la materia del examen o,
+  //    si no la trae, de la única «Unidad N» con preguntas activas; si hay varias no se adivina).
+  //  - Si el alumno tiene varios (ordinario, remedial, extraordinario) se usa el de mayor tipo y, a igual tipo, el más reciente.
+  //  - Nunca pisa lo que el profesor escribió a mano: solo llena celdas vacías o que ya eran automáticas.
+  function aplicarExamenesAuto(g, unidad){
+    var res = {estado: examAuto.estado, rellenadas: 0, sinResultado: 0, manuales: 0, sinMateria: false, info: {}};
+    if(examAuto.estado !== "ok") return res;
+    var materiaBase = claveTexto(g.materia);
+    if(!materiaBase){ res.sinMateria = true; return res; }
+    var numU = numeroUnidadCalif(g, unidad);
+    var datos = califBucket(g.id, unidad.id);
+    if(!datos.autoExamen) datos.autoExamen = {};
+    var cambio = false;
+
+    var candidatos = [];
+    examAuto.filas.forEach(function(f){
+      var nom = examAuto.nombres[f.materia_id];
+      if(!nom || !(f.total > 0)) return;
+      var inf = infoExamen(nom);
+      if(inf.base !== materiaBase) return;
+      var un = inf.unidad;
+      if(un == null){
+        var us = Object.keys(examAuto.unidadesMateria[f.materia_id] || {});
+        if(us.length === 1) un = parseInt(us[0], 10);
+      }
+      if(un !== numU) return;
+      candidatos.push({f: f, rango: inf.rango, nombre: nom});
+    });
+
+    var cacheM = matPorGrupo[g.id];
+    g.estudiantes.forEach(function(e){
+      var fm = cacheM && cacheM.estado === "ok" ? cacheM.filas[e.id] : null;
+      var mat = fm && fm.estado === "ok" ? fm.matricula : "";
+      var nk = claveTexto(e.nombre);
+      var mejor = null;
+      candidatos.forEach(function(c){
+        var coincide = mat ? c.f.matricula === mat : claveTexto(c.f.nombre) === nk;
+        if(!coincide) return;
+        if(!mejor || c.rango > mejor.rango || (c.rango === mejor.rango && String(c.f.creado_en) > String(mejor.f.creado_en))) mejor = c;
+      });
+      if(!mejor){ res.sinResultado++; return; }
+
+      var cfg = configColumna(datos, "examen");
+      var frac = mejor.f.correctas / mejor.f.total, valor;
+      if(cfg.modo === "porcentaje") valor = frac * 100;
+      else if(cfg.modo === "escala"){
+        var mx = numCalif(cfg.max);
+        if(!(mx > 0)){   // escala sin máximo: el máximo automático sería el mejor alumno; se fija en 10 para que el valor sea real
+          if(!datos.cols.examen) datos.cols.examen = {};
+          datos.cols.examen.max = "10"; mx = 10; cambio = true;
+        }
+        valor = frac * mx;
+      } else valor = frac * 10;
+      var txt = String(Math.round(valor * 100) / 100);
+
+      var actual = (datos.alumnos[e.id] || {}).examen;
+      var vacio = actual == null || String(actual).trim() === "";
+      if(vacio || String(actual) === datos.autoExamen[e.id]){
+        if(String(actual) !== txt){
+          if(!datos.alumnos[e.id]) datos.alumnos[e.id] = {};
+          datos.alumnos[e.id].examen = txt; cambio = true;
+        }
+        if(datos.autoExamen[e.id] !== txt){ datos.autoExamen[e.id] = txt; cambio = true; }
+        res.rellenadas++;
+        res.info[e.id] = {correctas: mejor.f.correctas, total: mejor.f.total, nombre: mejor.nombre, tipo: EXAM_TIPOS[mejor.rango] || ""};
+      } else res.manuales++;
+    });
+    if(cambio) guardarCalificaciones();
+    return res;
+  }
+  function textoExamenesAuto(r, puntos){
+    if(r.estado === "ok"){
+      if(r.sinMateria) return "Este grupo no tiene materia, así que no se pueden relacionar los exámenes.";
+      var t = "Exámen automático: " + r.rellenadas + " calificación(es) tomada(s) del examen de los alumnos (valen " + puntos + " pts)";
+      t += " · " + r.sinResultado + " sin examen de esta unidad";
+      if(r.manuales) t += " · " + r.manuales + " capturada(s) a mano (no se tocan)";
+      return t + ".";
+    }
+    if(r.estado === "idle" || r.estado === "cargando") return "Consultando los exámenes de los alumnos…";
+    return examAuto.msg || "No se pudieron consultar los exámenes.";
+  }
+
   function refrescarTotalesCalif(){
     var g = grupoActivo(); if(!g) return;
     var u = unidadCalifActual(g); if(!u) return;
@@ -2299,6 +2453,9 @@
     if(!unidad){
       return html + '<p class="empty">Este grupo no tiene unidades. Defínelas en "Historial y exportar" → "Unidades y periodos" para capturar calificaciones.</p></div>';
     }
+    asegurarMatriculas(g, true);   // la matrícula es lo que relaciona al alumno con su examen
+    asegurarExamenesAuto();
+    var autoRes = aplicarExamenesAuto(g, unidad);
     var r = calcularCalificaciones(g, unidad);
     html += '<div class="hist-toolbar">';
     html += '<div class="field" style="margin-bottom:0;"><label for="selUnidadCalif">Unidad</label><select id="selUnidadCalif">';
@@ -2321,6 +2478,7 @@
     html += '<span><b style="background:'+CALIF_COLORES.asist+';color:#000;width:auto;padding:0 10px;border-radius:12px;">Ser '+r.modelo.pesos.ser+'%</b> Asistencias ('+r.puntos.asist+' pto) + Participación ('+r.puntos.partic+' pto)</span>';
     html += '</div>';
     html += '<p class="helptext hist-rule">El extra suma o resta puntos directos y el total máximo es 10. La asistencia se calcula sola desde el historial.</p>';
+    html += '<p class="helptext" style="margin-top:4px;">'+esc(textoExamenesAuto(autoRes, r.puntos.examen))+' <button class="link-sutil" id="btnActualizarExamenes">Actualizar exámenes</button></p>';
     html += '</div>';
 
     // Cuadro aparte: cuántas asistencias, participaciones y trabajos hubo en el periodo.
@@ -2369,7 +2527,9 @@
       html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+'</td>';
       html += '<td>'+f.asist+' / '+r.dias+'</td>';
       ["examen","partic","extra","trab"].forEach(function(campo){
-        html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" class="calif-input"></td>';
+        var ia = campo === "examen" && autoRes.info[e.id] && r.datos.autoExamen && String(d.examen) === r.datos.autoExamen[e.id] ? autoRes.info[e.id] : null;
+        html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" class="calif-input'+(ia ? ' calif-auto' : '')+'"'
+          + (ia ? ' title="'+esc('Automático: '+ia.correctas+' / '+ia.total+' en «'+ia.nombre+'»'+(ia.tipo ? ' ('+ia.tipo+')' : '')+'. Si lo escribes a mano ya no se cambia solo.')+'"' : '')+'></td>';
       });
       html += '<td data-calif-total="'+esc(e.id)+'"><b>'+f.total+'</b></td></tr>';
     });
@@ -2495,6 +2655,8 @@
         var datos = califBucket(g.id, u.id), id = inp.getAttribute("data-estudiante");
         if(!datos.alumnos[id]) datos.alumnos[id] = {};
         datos.alumnos[id][inp.getAttribute("data-calif")] = inp.value;
+        // Lo escrito a mano manda: esa celda deja de ser automática y el examen ya no la pisa.
+        if(inp.getAttribute("data-calif") === "examen" && datos.autoExamen){ delete datos.autoExamen[id]; inp.classList.remove("calif-auto"); inp.removeAttribute("title"); }
         guardarCalificaciones(); refrescarTotalesCalif();
       });
       // Flechas arriba/abajo: pasa a la misma columna de la fila de arriba o de abajo.
@@ -2508,6 +2670,12 @@
         destino.focus();
         destino.select();
       });
+    });
+    var btnActExamenes = document.getElementById("btnActualizarExamenes");
+    if(btnActExamenes) btnActExamenes.addEventListener("click", function(){
+      examAuto.estado = "idle";
+      var g = grupoActivo(); if(g) delete matPorGrupo[g.id];
+      render();
     });
     var selModeloCalif = document.getElementById("selModeloCalif");
     if(selModeloCalif) selModeloCalif.addEventListener("change", function(){
