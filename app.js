@@ -250,6 +250,11 @@
   // PRISMAL MESH: el Historial también tiene la columna "Matrícula" (misma consulta y mismo botón
   // plegable que Pasar lista) y un filtro para ver solo los que no tienen: "todos" | "sin" | "con".
   var matFiltro = "todos";
+  // PRISMAL MESH: edición de la matrícula en Grupos → "Estudiantes de ...". matEdit = { gid, eid, valor }
+  // mientras se escribe; matGuardando evita dobles envíos; matFoco pide enfocar el campo tras dibujar.
+  var matEdit = null;
+  var matGuardando = false;
+  var matFoco = false;
   var pasarViewMode = "card";
   var pasarSegundaLista = null;
   var pasarSegundaIndex = null;
@@ -487,9 +492,39 @@
       if(g2.estudiantes.length === 0){
         html += '<p class="empty">Este grupo no tiene estudiantes todavía.</p>';
       } else {
+        // PRISMAL MESH: aquí la matrícula se consulta siempre (no depende de la columna plegable de Pasar lista)
+        // y se puede agregar o corregir con "Editar"; se guarda en Supabase con la función guardar_matricula.
+        var cacheEst = asegurarMatriculas(g2, true);
+        if(cacheEst){
+          if(cacheEst.estado === "ok"){
+            var conE = 0, sinE = 0;
+            g2.estudiantes.forEach(function(e){ if(tieneMatricula(cacheEst, e)) conE++; else sinE++; });
+            html += '<p class="helptext" style="margin:0 0 6px;">'+conE+' con matrícula · '+sinE+' sin matrícula <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></p>';
+          } else if(cacheEst.estado === "cargando"){
+            html += '<p class="helptext" style="margin:0 0 6px;">Consultando matrículas…</p>';
+          } else {
+            html += '<p class="helptext" style="margin:0 0 6px;">'+esc(cacheEst.msg)+' <button class="link-sutil" id="btnRefrescarMatriculas">Reintentar</button></p>';
+          }
+        }
         html += '<ul class="estudiantes">';
         g2.estudiantes.forEach(function(e){
-          html += '<li><span>'+esc(e.nombre)+'</span><button class="btn danger" data-del-estudiante="'+esc(e.id)+'">Quitar</button></li>';
+          var fm = cacheEst && cacheEst.estado === "ok" ? cacheEst.filas[e.id] : null;
+          var editando = !!(matEdit && matEdit.gid === g2.id && matEdit.eid === e.id);
+          html += '<li><span class="est-nombre">'+esc(e.nombre)+'</span>';
+          if(editando){
+            var valorIni = matEdit.valor !== undefined ? matEdit.valor : (fm && fm.estado === "ok" ? fm.matricula : "");
+            html += '<span class="est-mat"><input type="text" id="inputMatricula" class="input-matricula" placeholder="Matrícula" autocomplete="off" value="'+esc(valorIni)+'"'+(matGuardando?' disabled':'')+'></span>';
+            html += '<span class="est-acciones"><button class="btn" data-guardar-mat="'+esc(e.id)+'"'+(matGuardando?' disabled':'')+'>'+(matGuardando?"Guardando…":"Guardar")+'</button>';
+            html += '<button class="btn secondary" data-cancelar-mat="1"'+(matGuardando?' disabled':'')+'>Cancelar</button></span>';
+          } else {
+            html += '<span class="est-mat">'+(cacheEst && cacheEst.estado === "cargando" ? '<span class="helptext" style="margin:0;">…</span>' : celdaMatriculaHtml(cacheEst, e))+'</span>';
+            html += '<span class="est-acciones">';
+            if(fm && (fm.estado === "ok" || fm.estado === "sin")){
+              html += '<button class="btn secondary" data-editar-mat="'+esc(e.id)+'">Editar</button>';
+            }
+            html += '<button class="btn danger" data-del-estudiante="'+esc(e.id)+'">Quitar</button></span>';
+          }
+          html += '</li>';
         });
         html += "</ul>";
       }
@@ -712,11 +747,41 @@
     render();
   }
 
+  // Guarda (alta) o corrige (edición) la matrícula de un alumno en Supabase con la función guardar_matricula
+  // (solo admin). En una edición el servidor cambia la matrícula también en todo su historial, todo o nada.
+  async function guardarMatricula(g, est, anterior, nueva){
+    var api = window.FullStatusSupabase;
+    if(!api || !api.rpc){ showToast("Falta cargar supabase-asistencias.js."); return; }
+    if(!navigator.onLine){ showToast("Sin conexión: la matrícula se guarda en línea."); return; }
+    matGuardando = true;
+    if(matEdit) matEdit.valor = nueva;
+    render();
+    try {
+      var res = await api.rpc("guardar_matricula", {
+        p_grupo: g.grupoBase || g.nombre,
+        p_nombre: est.nombre,
+        p_matricula_anterior: anterior || "",
+        p_matricula: nueva
+      });
+      if(res && res.sinSesion){
+        showToast("Inicia sesión en ☁ Alumnos (administrador) para guardar la matrícula.");
+      } else {
+        matEdit = null;
+        matPorGrupo = {};   // fuerza a releer las matrículas de todos los grupos
+        showToast(anterior ? "Matrícula actualizada: " + nueva + "." : "Matrícula agregada: " + nueva + ".");
+      }
+    } catch(err){
+      showToast("No se pudo guardar: " + (err && err.message || err));
+    }
+    matGuardando = false;
+    render();
+  }
+
   // Datos de matrícula del grupo (consulta una vez si la columna está abierta y no hay datos o cambió la lista).
-  function asegurarMatriculas(g){
+  function asegurarMatriculas(g, forzar){
     var cache = matPorGrupo[g.id];
     var firma = g.estudiantes.map(function(e){ return e.id; }).join("|");
-    if(matVisible && (!cache || cache.firma !== firma)){
+    if((matVisible || forzar) && (!cache || cache.firma !== firma)){
       cache = matPorGrupo[g.id] = { firma: firma, estado: "cargando", filas: {}, msg: "" };
       setTimeout(function(){ cargarMatriculas(g); }, 0);
     }
@@ -2638,6 +2703,47 @@
           pasarIndex = null;
           saveState(); render();
         });
+      });
+    });
+
+    // PRISMAL MESH: editar / agregar la matrícula de un alumno (Grupos → Estudiantes de ...).
+    document.querySelectorAll("[data-editar-mat]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        if(!g) return;
+        matEdit = { gid: g.id, eid: btn.getAttribute("data-editar-mat") };
+        matFoco = true;
+        render();
+      });
+    });
+    document.querySelectorAll("[data-cancelar-mat]").forEach(function(btn){
+      btn.addEventListener("click", function(){ matEdit = null; render(); });
+    });
+    var inputMat = document.getElementById("inputMatricula");
+    if(inputMat){
+      inputMat.addEventListener("input", function(){ if(matEdit) matEdit.valor = inputMat.value; });
+      inputMat.addEventListener("keydown", function(ev){
+        if(ev.key === "Enter"){ ev.preventDefault(); var b = document.querySelector("[data-guardar-mat]"); if(b) b.click(); }
+        else if(ev.key === "Escape"){ matEdit = null; render(); }
+      });
+      if(matFoco){ matFoco = false; inputMat.focus(); inputMat.select(); }
+    }
+    document.querySelectorAll("[data-guardar-mat]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var est = g && g.estudiantes.find(function(e){ return e.id === btn.getAttribute("data-guardar-mat"); });
+        if(!g || !est || matGuardando) return;
+        var campo = document.getElementById("inputMatricula");
+        var nueva = String(campo ? campo.value : "").replace(/\s+/g, "");
+        if(!nueva){ showToast("Escribe la matrícula (sin espacios)."); return; }
+        var cacheG = matPorGrupo[g.id];
+        var fila = cacheG && cacheG.estado === "ok" ? cacheG.filas[est.id] : null;
+        var anterior = fila && fila.estado === "ok" ? fila.matricula : "";
+        if(nueva === anterior){ matEdit = null; render(); return; }
+        function enviar(){ guardarMatricula(g, est, anterior, nueva); }
+        if(anterior){
+          confirmar("Vas a cambiar la matrícula de " + est.nombre + " de " + anterior + " a " + nueva + ". Se actualizará también su historial en Supabase (asistencias, calificaciones y exámenes). ¿Continuar?", enviar);
+        } else enviar();
       });
     });
 

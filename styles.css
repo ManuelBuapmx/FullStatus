@@ -123,6 +123,12 @@ label.filebtn input{display:none;}
 ul.estudiantes{list-style:none;margin:0;padding:0;}
 ul.estudiantes li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);}
 ul.estudiantes li:last-child{border-bottom:none;}
+ul.estudiantes li{flex-wrap:wrap;}
+ul.estudiantes li .est-nombre{flex:1 1 220px;min-width:0;}
+ul.estudiantes li .est-mat{flex:0 1 220px;font-size:0.9rem;white-space:nowrap;}
+ul.estudiantes li .est-acciones{display:flex;gap:8px;align-items:center;}
+ul.estudiantes li .est-acciones .btn:not(.danger){padding:8px 12px;min-height:40px;font-size:0.84rem;}
+input.input-matricula{width:100%;min-height:40px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);font-size:0.94rem;font-family:inherit;}
 .empty{color:var(--ink-soft);padding:20px 2px;font-size:0.95rem;}
 .helptext{color:var(--ink-soft);font-size:0.84rem;margin-top:8px;}
 
