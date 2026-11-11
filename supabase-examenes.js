@@ -35,6 +35,8 @@
      admin.html y la pestaña Resultados (que ya muestra el nombre de la materia como «Tipo de examen»)
      funcionan sin cambios ni migraciones en la base.
    - Reemplazar solo desactiva las preguntas ACTIVAS DE LA MISMA UNIDAD; las otras unidades no se tocan.
+   - Cada examen (unidad) es independiente: sus números de orden continúan después de los de las otras
+     unidades de la materia, así nunca se encima ni se mezcla con otra unidad.
    ============================================================================ */
 (function () {
   'use strict';
@@ -453,8 +455,16 @@
   function subirExamen(api, mid, preguntas, modo, existentes, seccion) {
     var etapa = 'insertar';
     var activasViejas = (existentes || []).filter(function (q) { return q.activa && (seccion === undefined || q.seccion === seccion); }).map(function (q) { return q.id; });
+    // Orden de las preguntas nuevas: cada examen (unidad) es independiente de los demás, así que sus
+    // números nunca se encimen con los de otra unidad de la materia.
+    //  - Agregar: continúa después del orden más alto de TODA la materia.
+    //  - Reemplazar: continúa después del orden más alto de las OTRAS unidades (las de esta unidad se
+    //    desactivan, así que no cuentan). Sin "seccion" (uso antiguo) se reinicia desde 1.
     var offset = 0;
-    if (modo === 'agregar') (existentes || []).forEach(function (q) { if (q.orden > offset) offset = q.orden; });
+    (existentes || []).forEach(function (q) {
+      var cuenta = modo === 'agregar' || (seccion !== undefined && q.seccion !== seccion);
+      if (cuenta && q.orden > offset) offset = q.orden;
+    });
     var reemplaza = modo === 'reemplazar';
     var filas = preguntas.map(function (p) {
       return {
