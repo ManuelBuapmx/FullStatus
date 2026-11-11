@@ -2044,15 +2044,15 @@
   function htmlTablaResultados(){
     var filas = resultadosFiltrados();
     if(filas.length === 0) return '<p class="empty">No hay resultados con estos filtros.</p>';
-    var html = '<div class="table-scroll"><table class="matriz"><thead><tr><th>Alumno</th><th>Matrícula</th><th>Grupo</th><th>Tipo de examen</th><th>Aciertos</th><th>Fecha</th><th>Reanud.</th></tr></thead><tbody>';
+    var html = '<div class="table-scroll"><table class="matriz"><thead><tr><th>Alumno</th><th>Matrícula</th><th>Grupo</th><th>Tipo de examen</th><th>Aciertos</th><th>Fecha</th><th>Reanud.</th><th>Acción</th></tr></thead><tbody>';
     filas.forEach(function(f){
       var fecha = f.creado_en ? new Date(f.creado_en).toLocaleString("es-MX") : "";
-      html += '<tr><td title="'+esc(f.nombre||"")+'">'+esc(f.nombre||"")+'</td><td>'+esc(f.matricula||"")+'</td><td>'+esc(f.grupo||"")+'</td><td>'+esc(resDatos.nombres[f.materia_id]||"")+'</td><td>'+f.correctas+" / "+f.total+'</td><td>'+esc(fecha)+'</td><td title="'+esc(f.motivo||"")+'">'+(f.reanudaciones||0)+'</td></tr>';
+      html += '<tr><td title="'+esc(f.nombre||"")+'">'+esc(f.nombre||"")+'</td><td>'+esc(f.matricula||"")+'</td><td>'+esc(f.grupo||"")+'</td><td>'+esc(resDatos.nombres[f.materia_id]||"")+'</td><td>'+f.correctas+" / "+f.total+'</td><td>'+esc(fecha)+'</td><td title="'+esc(f.motivo||"")+'">'+(f.reanudaciones||0)+'</td><td><button class="link-sutil" data-reactivar="'+esc(f.id)+'">Reactivar</button></td></tr>';
     });
     return html + "</tbody></table></div>";
   }
   function renderResultados(){
-    var html = '<div class="card"><div class="eyebrow">Solo lectura</div><h2>Resultados de los exámenes</h2>';
+    var html = '<div class="card"><h2>Resultados de los exámenes</h2>';
     if(!navigator.onLine) return html + '<p class="empty">Sin conexión: los resultados se consultan en línea.</p></div>';
     if(resCargando) return html + '<p class="empty">Cargando resultados…</p></div>';
     if(!resDatos){
@@ -2705,6 +2705,32 @@
       copiarPortapapeles(filas.map(function(fila){ return fila.join("\t"); }).join("\n"));
     });
 
+    // PRISMAL MESH: «Reactivar» = borrar el resultado y el intento de ESE alumno en ESE examen para que lo
+    // conteste de nuevo. El resultado anterior se conserva en el servidor (tabla examenes_reactivados).
+    var resTablaEl = document.getElementById("resTabla");
+    if(resTablaEl) resTablaEl.addEventListener("click", async function(ev){
+      var b = ev.target.closest ? ev.target.closest("[data-reactivar]") : null;
+      if(!b) return;
+      var id = b.getAttribute("data-reactivar");
+      var f = resDatos && resDatos.filas.find(function(x){ return String(x.id) === id; });
+      if(!f) return;
+      var examen = resDatos.nombres[f.materia_id] || "este examen";
+      if(!window.confirm("Reactivar el examen de " + (f.nombre || f.matricula) + ":\n\n" + examen + "\nResultado actual: " + f.correctas + " / " + f.total +
+        "\n\nSe borra ese resultado y podrá contestarlo de nuevo desde cero. El resultado anterior queda guardado en el servidor.\n\n¿Reactivar?")) return;
+      b.disabled = true;
+      try {
+        var api = window.FullStatusSupabase;
+        if(!api || !api.rpc) throw new Error("Falta cargar supabase-asistencias.js.");
+        var res = await api.rpc("reactivar_examen", { p_resultado_id: Number(id) });
+        if(res && res.sinSesion) throw new Error("Inicia sesión en ☁ Alumnos (administrador) para reactivar.");
+        resDatos.filas = resDatos.filas.filter(function(x){ return String(x.id) !== id; });
+        resTablaEl.innerHTML = htmlTablaResultados();
+        showToast("Examen reactivado: " + (f.nombre || f.matricula) + " ya puede contestarlo de nuevo.");
+      } catch(err){
+        b.disabled = false;
+        showToast(err.message || "No se pudo reactivar el examen.");
+      }
+    });
     var btnResActualizar = document.getElementById("btnResActualizar");
     if(btnResActualizar) btnResActualizar.addEventListener("click", cargarResultados);
     var selResMateria = document.getElementById("selResMateria");
