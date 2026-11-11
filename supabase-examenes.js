@@ -26,12 +26,23 @@
    - Una materia nueva se crea DESACTIVADA; activarla y fijar su horario o asignaciones se sigue
      haciendo en el panel de administración (admin.html).
    - No usa alert()/confirm()/prompt() (Electron): la confirmación va dentro de la pestaña.
+   - DESTINO DEL EXAMEN = Materia + Unidad + Tipo (10/nov/2026). La materia sale de una lista:
+     las materias de inglés registradas en los grupos de FullStatus (window.FullStatusMateriasGrupos,
+     definida en app.js) y Ética. La unidad se guarda en preguntas.seccion como «Unidad N» (así
+     arma FullStatus Student su menú). El tipo NO es una columna nueva: «Ordinario» usa la materia
+     tal cual; Remedial y Extraordinario 1, 2 o 3 van a una materia aparte llamada
+     «<Materia> · <Tipo>» (se crea desactivada). Así FullStatus Student, el horario/asignación de
+     admin.html y la pestaña Resultados (que ya muestra el nombre de la materia como «Tipo de examen»)
+     funcionan sin cambios ni migraciones en la base.
+   - Reemplazar solo desactiva las preguntas ACTIVAS DE LA MISMA UNIDAD; las otras unidades no se tocan.
    ============================================================================ */
 (function () {
   'use strict';
 
-  const CLAVE_BORRADOR = 'fullstatusExamenesBorrador_v1'; // { texto, materiaId, modo }
+  const CLAVE_BORRADOR = 'fullstatusExamenesBorrador_v1'; // { texto, materiaNombre, unidad, tipo, modo }
   const ESPERA_ANALISIS_MS = 10000;                       // tope para el análisis aislado del script
+  const TIPOS_EXAMEN = ['Ordinario', 'Remedial', 'Extraordinario 1', 'Extraordinario 2', 'Extraordinario 3'];
+  const MAX_UNIDADES = 5;                                 // unidades que ofrece la lista (1 a 5)
 
   // =========================================================================
   // 1) LIMPIEZA Y CORRECCIÓN DEL SCRIPT PEGADO (portado de admin.html)
@@ -414,9 +425,10 @@
 
   // Cuántas preguntas nuevas ya existen (mismo texto) entre las ACTIVAS de la materia: sirve para
   // avisar de duplicados cuando se elige "Agregar al final".
-  function contarDuplicados(nuevas, existentes) {
+  // "seccion" (opcional) limita la comparación a las preguntas de esa unidad.
+  function contarDuplicados(nuevas, existentes, seccion) {
     var vistos = {};
-    (existentes || []).forEach(function (q) { if (q.activa) vistos[normalizarTexto(q.texto)] = true; });
+    (existentes || []).forEach(function (q) { if (q.activa && (seccion === undefined || q.seccion === seccion)) vistos[normalizarTexto(q.texto)] = true; });
     return nuevas.filter(function (p) { return vistos[normalizarTexto(p.texto)]; }).length;
   }
 
@@ -436,16 +448,18 @@
   //  - Agregar: se insertan ACTIVAS al final del orden.
   //  - Reemplazar: se insertan DESACTIVADAS -> se desactivan las anteriores -> se activan las nuevas.
   // Todas las filas llevan exactamente las mismas claves (requisito de la inserción masiva de PostgREST).
-  function subirExamen(api, mid, preguntas, modo, existentes) {
+  // "seccion" (opcional, p. ej. "Unidad 2"): todas las preguntas nuevas se guardan en esa sección y
+  // "reemplazar" solo desactiva las activas de ESA sección (las demás unidades quedan intactas).
+  function subirExamen(api, mid, preguntas, modo, existentes, seccion) {
     var etapa = 'insertar';
-    var activasViejas = (existentes || []).filter(function (q) { return q.activa; }).map(function (q) { return q.id; });
+    var activasViejas = (existentes || []).filter(function (q) { return q.activa && (seccion === undefined || q.seccion === seccion); }).map(function (q) { return q.id; });
     var offset = 0;
     if (modo === 'agregar') (existentes || []).forEach(function (q) { if (q.orden > offset) offset = q.orden; });
     var reemplaza = modo === 'reemplazar';
     var filas = preguntas.map(function (p) {
       return {
         texto: p.texto, opciones: p.opciones, correcta: p.correcta, orden: p.orden + offset,
-        activa: !reemplaza, materia_id: mid, seccion: p.seccion || null, contexto: p.contexto || null
+        activa: !reemplaza, materia_id: mid, seccion: seccion !== undefined ? seccion : (p.seccion || null), contexto: p.contexto || null
       };
     });
     var nuevosIds = [];
@@ -483,15 +497,19 @@
   }
   var borrador = leerBorrador();
   var est = {
-    materias: [], materiaId: borrador.materiaId || '',
-    existentes: null,                         // preguntas de la materia elegida (id, orden, activa, texto)
+    materias: [],                             // filas de la tabla `materias` (id, nombre, activa, orden)
+    materiaNombre: borrador.materiaNombre || '',   // materia elegida en la lista (inglés de los grupos o Ética)
+    unidad: (Number(borrador.unidad) >= 1 && Number(borrador.unidad) <= MAX_UNIDADES) ? String(Number(borrador.unidad)) : '1',
+    tipo: TIPOS_EXAMEN.indexOf(borrador.tipo) >= 0 ? borrador.tipo : 'Ordinario',
+    materiaId: '',                            // id de la materia DESTINO en Supabase ('' si todavía no existe)
+    existentes: null,                         // preguntas de la materia destino (id, orden, activa, texto, seccion)
     texto: borrador.texto || '', modo: borrador.modo === 'agregar' ? 'agregar' : 'reemplazar',
     preview: null, avisos: [],
-    ocupado: '', msg: '', err: '', confirmando: false, nuevaMateria: ''
+    ocupado: '', msg: '', err: '', confirmando: false
   };
   var raiz = null; // contenedor de esta pestaña; si ya no está en pantalla (cambió de pestaña) no se dibuja nada
   function guardarBorrador() {
-    try { localStorage.setItem(CLAVE_BORRADOR, JSON.stringify({ texto: est.texto, materiaId: est.materiaId, modo: est.modo })); } catch (e) { /* sin espacio: no es grave */ }
+    try { localStorage.setItem(CLAVE_BORRADOR, JSON.stringify({ texto: est.texto, materiaNombre: est.materiaNombre, unidad: est.unidad, tipo: est.tipo, modo: est.modo })); } catch (e) { /* sin espacio: no es grave */ }
   }
 
   function sesionApi() { return window.FullStatusSupabase; }
@@ -506,30 +524,61 @@
   }
 
   function cargarMaterias() {
-    return rest('materias?select=id,nombre,activa,orden&order=orden.asc').then(function (filas) {
-      est.materias = filas || [];
-      if (!est.materias.some(function (m) { return String(m.id) === String(est.materiaId); })) {
-        est.materiaId = est.materias.length ? String(est.materias[0].id) : '';
-      }
-    });
+    return rest('materias?select=id,nombre,activa,orden&order=orden.asc').then(function (filas) { est.materias = filas || []; });
   }
-  // Solo se leen id, orden, activa y texto: NUNCA la respuesta correcta.
+  // Solo se leen id, orden, activa, texto y seccion: NUNCA la respuesta correcta.
   function cargarExistentes(mid) {
     if (mid === '' || mid === null || mid === undefined) { est.existentes = null; return Promise.resolve(); }
-    return rest('preguntas?select=id,orden,activa,texto&materia_id=eq.' + Number(mid) + '&order=orden.asc')
+    return rest('preguntas?select=id,orden,activa,texto,seccion&materia_id=eq.' + Number(mid) + '&order=orden.asc')
       .then(function (filas) { est.existentes = filas || []; });
+  }
+
+  // --- Destino del examen: materia (lista) + unidad + tipo -------------------------------------
+  // Clave para comparar nombres: sin acentos ni mayúsculas, y «english» = «ingles» (en Supabase la
+  // materia puede llamarse ENGLISH XI y en el grupo Inglés XI).
+  function clave(s) { return normalizarTexto(s).replace(/english/g, 'ingles'); }
+  // Materias que ofrece la lista: las de inglés (y Ética) registradas en los grupos + Ética siempre.
+  function materiasDisponibles() {
+    var lista = [], vistos = {}, grupos = [];
+    try { if (typeof window.FullStatusMateriasGrupos === 'function') grupos = window.FullStatusMateriasGrupos() || []; } catch (e) { grupos = []; }
+    grupos.forEach(function (m) {
+      var k = clave(m);
+      if ((/ingles/.test(k) || /etica/.test(k)) && !vistos[k]) { vistos[k] = true; lista.push(m); }
+    });
+    if (!vistos[clave('Ética')]) lista.push('Ética');
+    return lista;
+  }
+  function asegurarMateria() {
+    var op = materiasDisponibles();
+    if (op.indexOf(est.materiaNombre) < 0) est.materiaNombre = op[0] || '';
+  }
+  // Ordinario usa la materia tal cual; los demás tipos van a «<Materia> · <Tipo>».
+  function nombreDestino() { return est.tipo === 'Ordinario' ? est.materiaNombre : est.materiaNombre + ' \u00b7 ' + est.tipo; }
+  function seccionDestino() { return 'Unidad ' + est.unidad; }
+  function buscarDestino() {
+    var k = clave(nombreDestino());
+    return est.materias.find(function (m) { return clave(m.nombre) === k; }) || null;
+  }
+  // Localiza (si ya existe) la materia destino y carga sus preguntas.
+  function actualizarDestino() {
+    var m = buscarDestino();
+    est.materiaId = m ? String(m.id) : '';
+    est.existentes = null;
+    return cargarExistentes(est.materiaId);
+  }
+  // Crea la materia destino DESACTIVADA (se activa y se le fija horario en admin.html). Devuelve su id.
+  function crearMateriaDestino(nombre) {
+    var orden = est.materias.reduce(function (mx, m) { return Math.max(mx, m.orden || 0); }, 0) + 1;
+    return escribirConfirmado(rest, 'materias?select=id', 'POST', { nombre: nombre, orden: orden, activa: false }, 1)
+      .then(function (filas) { return Number(filas[0].id); });
   }
   function refrescar() {
     if (!haySesion()) { pintar(); return Promise.resolve(); }
     est.ocupado = 'Cargando materias...'; pintar();
-    return cargarMaterias().then(function () { return cargarExistentes(est.materiaId); })
+    return cargarMaterias().then(function () { asegurarMateria(); return actualizarDestino(); })
       .then(function () { est.ocupado = ''; pintar(); }).catch(function (e) { fallo(e, ''); });
   }
 
-  function nombreMateria(id) {
-    var m = est.materias.find(function (x) { return String(x.id) === String(id); });
-    return m ? m.nombre : 'materia ' + id;
-  }
   // Muestra el error (o el aviso de falta de conexión) y repinta.
   function fallo(e, prefijo) {
     est.ocupado = '';
@@ -567,38 +616,43 @@
     return tarjeta;
   }
 
+  // Un <select> con etiqueta. opciones = [{ valor, texto }]; alCambiar recibe el valor elegido.
+  function campoSelect(id, etiqueta, opciones, actual, alCambiar) {
+    var sel = h('select', { id: id });
+    opciones.forEach(function (o) { sel.appendChild(h('option', { value: o.valor, text: o.texto })); });
+    sel.value = actual;
+    sel.addEventListener('change', function () { alCambiar(sel.value); });
+    return h('div', { 'class': 'field' }, [h('label', { 'for': id, text: etiqueta }), sel]);
+  }
+
   function vistaMateria() {
-    var sel = h('select', { id: 'exaMateria' });
-    est.materias.forEach(function (m) { sel.appendChild(h('option', { value: String(m.id), text: m.nombre + (m.activa ? '' : ' (desactivada)') })); });
-    sel.value = String(est.materiaId);
-    sel.addEventListener('change', function () {
-      est.materiaId = sel.value; est.existentes = null; est.confirmando = false; guardarBorrador();
-      cargarExistentes(est.materiaId).then(pintar).catch(function (e) { fallo(e, ''); });
+    asegurarMateria();
+    // Cualquier cambio del destino: se guarda el borrador y se vuelve a ubicar la materia destino.
+    function cambio(campo, valor) {
+      est[campo] = valor; est.confirmando = false; guardarBorrador();
+      actualizarDestino().then(pintar).catch(function (e) { fallo(e, ''); });
       pintar();
-    });
-    var nueva = h('input', { type: 'text', id: 'exaNuevaMateria', placeholder: 'Nombre de una materia nueva', maxlength: '120', value: est.nuevaMateria });
-    nueva.addEventListener('input', function () { est.nuevaMateria = nueva.value; });
+    }
+    var unidades = [];
+    for (var u = 1; u <= MAX_UNIDADES; u++) unidades.push({ valor: String(u), texto: 'Unidad ' + u });
     var info = '';
-    if (est.existentes) {
-      var act = est.existentes.filter(function (q) { return q.activa; }).length;
-      info = '«' + nombreMateria(est.materiaId) + '» tiene ' + est.existentes.length + ' pregunta(s), ' + act + ' activa(s).';
+    if (est.materiaNombre) {
+      if (!est.materiaId) {
+        info = '«' + nombreDestino() + '» todavía no existe en Supabase: se creará desactivada al subir el examen.';
+      } else if (est.existentes) {
+        var sec = seccionDestino();
+        var deUnidad = est.existentes.filter(function (q) { return q.seccion === sec; });
+        var act = deUnidad.filter(function (q) { return q.activa; }).length;
+        info = '«' + nombreDestino() + '» tiene ' + est.existentes.length + ' pregunta(s); en la ' + sec + ': ' + deUnidad.length + ' (' + act + ' activa(s)).';
+      }
     }
     return h('div', { 'class': 'card' }, [
-      h('h2', { text: 'Materia (examen) destino' }),
-      h('div', { 'class': 'field' }, [h('label', { 'for': 'exaMateria', text: 'Materia' }), sel]),
-      info ? h('p', { 'class': 'helptext', text: info }) : null,
-      h('div', { 'class': 'field', style: 'margin-top:12px' }, [h('label', { 'for': 'exaNuevaMateria', text: 'O crea una materia nueva (se crea desactivada)' }), nueva]),
-      h('div', { 'class': 'row' }, [boton('Crear materia', 'secondary', function () {
-        var n = est.nuevaMateria.trim();
-        if (!n) { est.err = 'Escribe el nombre de la materia.'; pintar(); return; }
-        var orden = est.materias.reduce(function (mx, m) { return Math.max(mx, m.orden || 0); }, 0) + 1;
-        est.err = ''; est.msg = ''; est.ocupado = 'Creando materia...'; pintar();
-        escribirConfirmado(rest, 'materias', 'POST', { nombre: n, orden: orden, activa: false }, 1)
-          .then(function (filas) { est.materiaId = String(filas[0].id); est.nuevaMateria = ''; est.existentes = null; guardarBorrador(); return cargarMaterias(); })
-          .then(function () { return cargarExistentes(est.materiaId); })
-          .then(function () { est.ocupado = ''; est.msg = 'Materia creada (desactivada). Actívala en el panel de administración cuando el examen esté listo.'; pintar(); })
-          .catch(function (e) { fallo(e, 'No se pudo crear la materia: '); });
-      })])
+      h('h2', { text: 'Destino del examen' }),
+      h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'La materia sale de tus grupos (inglés) más Ética. Las preguntas se guardan en la unidad elegida. El tipo Ordinario usa la materia tal cual; Remedial y Extraordinario 1, 2 o 3 se guardan en una materia aparte «Materia · Tipo», para que cada examen tenga su propio horario y sus propios resultados.' }),
+      campoSelect('exaMateria', 'Materia', materiasDisponibles().map(function (m) { return { valor: m, texto: m }; }), est.materiaNombre, function (v) { cambio('materiaNombre', v); }),
+      campoSelect('exaUnidad', 'Unidad', unidades, est.unidad, function (v) { cambio('unidad', v); }),
+      campoSelect('exaTipo', 'Tipo de examen', TIPOS_EXAMEN.map(function (t) { return { valor: t, texto: t }; }), est.tipo, function (v) { cambio('tipo', v); }),
+      info ? h('p', { 'class': 'helptext', text: info }) : null
     ]);
   }
 
@@ -656,7 +710,7 @@
 
   function vistaSubida() {
     var lista = est.preview, errores = lista.filter(function (p) { return p._error; }).length;
-    var puede = !errores && lista.length > 0 && !!est.materiaId && !est.ocupado;
+    var puede = !errores && lista.length > 0 && !!est.materiaNombre && !est.ocupado;
     function opcion(valor, texto) {
       var r = h('input', { type: 'radio', name: 'exaModo', style: 'width:auto;min-height:0;margin-top:4px' });
       r.checked = est.modo === valor;
@@ -671,29 +725,37 @@
     });
     subir.disabled = !puede;
     var partes = [
-      h('h2', { text: 'Subir a «' + (est.materiaId ? nombreMateria(est.materiaId) : '—') + '»' }),
-      opcion('reemplazar', 'Reemplazar el examen activo (las preguntas activas actuales se desactivan, no se borran)'),
+      h('h2', { text: 'Subir a «' + nombreDestino() + '» · ' + seccionDestino() }),
+      h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Todas las preguntas se guardarán en la ' + seccionDestino() + ' (las secciones del script no se usan como unidad).' }),
+      opcion('reemplazar', 'Reemplazar el examen activo de esta unidad (sus preguntas activas actuales se desactivan, no se borran; las otras unidades no se tocan)'),
       opcion('agregar', 'Agregar al final de las preguntas de la materia'),
       h('div', { 'class': 'row', style: 'margin-top:12px' }, [subir]),
       errores ? h('p', { 'class': 'helptext', text: 'Corrige el script y vuelve a analizar: no se puede subir con preguntas con error.' }) : null
     ];
-    if (est.confirmando && est.existentes) {
-      var act = est.existentes.filter(function (q) { return q.activa; }).length;
-      var dup = est.modo === 'agregar' ? contarDuplicados(lista, est.existentes) : 0;
-      var resumen = 'Vas a subir ' + lista.length + ' pregunta(s) a «' + nombreMateria(est.materiaId) + '». '
-        + (est.modo === 'reemplazar' ? 'Se desactivarán ' + act + ' pregunta(s) activa(s) actuales. ' : 'Se agregarán después de las ' + est.existentes.length + ' existentes. ')
-        + (dup ? '⚠ ' + dup + ' ya existen activas con el mismo texto (quedarían duplicadas). ' : '')
+    if (est.confirmando) {
+      var sec = seccionDestino(), existentes = est.existentes || [];
+      var act = existentes.filter(function (q) { return q.activa && q.seccion === sec; }).length;
+      var dup = est.modo === 'agregar' ? contarDuplicados(lista, existentes, sec) : 0;
+      var resumen = 'Vas a subir ' + lista.length + ' pregunta(s) a «' + nombreDestino() + '» (' + sec + '). '
+        + (est.materiaId ? '' : 'La materia todavía no existe: se creará DESACTIVADA. ')
+        + (est.modo === 'reemplazar' ? 'Se desactivarán ' + act + ' pregunta(s) activa(s) de esta unidad. ' : 'Se agregarán después de las ' + existentes.length + ' existentes de la materia. ')
+        + (dup ? '⚠ ' + dup + ' ya existen activas con el mismo texto en esta unidad (quedarían duplicadas). ' : '')
         + 'No lo hagas mientras haya alumnos contestando: se calificaría mal.';
       partes.push(h('div', { style: 'border:1px solid var(--brand-accent);border-radius:8px;padding:12px;margin-top:14px;background:var(--accent-soft)' }, [
         h('p', { style: 'margin:0 0 10px', text: resumen }),
         h('div', { 'class': 'row' }, [
           boton('Sí, subir ahora', '', function () {
             est.confirmando = false; est.err = ''; est.ocupado = 'Subiendo...'; pintar();
-            subirExamen(rest, Number(est.materiaId), lista, est.modo, est.existentes).then(function (r) {
-              est.ocupado = ''; est.preview = null; est.avisos = []; est.texto = ''; guardarBorrador();
-              est.msg = 'Listo: ' + r.subidas + ' pregunta(s) subidas a «' + nombreMateria(est.materiaId) + '»' + (r.desactivadas ? ' (se desactivaron ' + r.desactivadas + ' anteriores)' : '') + '.';
-              return cargarExistentes(est.materiaId);
-            }).then(pintar).catch(function (e) { fallo(e, 'No se pudo subir. '); });
+            var destino = nombreDestino(), creada = !est.materiaId, modo = est.modo;
+            // Si la materia destino no existe se crea primero (desactivada); luego se suben las preguntas.
+            var preparar = creada ? crearMateriaDestino(destino) : Promise.resolve(Number(est.materiaId));
+            preparar.then(function (mid) { return subirExamen(rest, mid, lista, modo, creada ? [] : existentes, sec); })
+              .then(function (r) {
+                est.ocupado = ''; est.preview = null; est.avisos = []; est.texto = ''; guardarBorrador();
+                est.msg = 'Listo: ' + r.subidas + ' pregunta(s) subidas a «' + destino + '» (' + sec + ')' + (r.desactivadas ? ' (se desactivaron ' + r.desactivadas + ' anteriores)' : '') + '.'
+                  + (creada ? ' La materia se creó desactivada: actívala y fija su horario en el panel de administración.' : '');
+                return cargarMaterias().then(actualizarDestino);
+              }).then(pintar).catch(function (e) { fallo(e, 'No se pudo subir. '); });
           }),
           boton('Cancelar', 'secondary', function () { est.confirmando = false; pintar(); })
         ])

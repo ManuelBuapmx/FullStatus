@@ -2115,6 +2115,16 @@
   // publicar_calificaciones de Supabase: por grupo, cada alumno con sus unidades y los puntos
   // de cada componente (asistencias, actividades, participaciones, examen) más el extra.
   // "examen" va en null mientras no se capture, para que el alumno vea la unidad como incompleta.
+  // Solo lectura: la usa supabase-examenes.js para la lista desplegable de materias. Devuelve los
+  // nombres de materia distintos de los grupos de la escuela a la vista (sin repetir, ordenados).
+  window.FullStatusMateriasGrupos = function(){
+    var vistos = {}, lista = [];
+    state.grupos.forEach(function(g){
+      var m = (g.materia || "").trim(), k = m.toLowerCase();
+      if(m && !vistos[k]){ vistos[k] = true; lista.push(m); }
+    });
+    return lista.sort(function(x, y){ return x.localeCompare(y, "es"); });
+  };
   window.FullStatusCalifExport = function(){
     function r2(n){ return Math.round(n * 100) / 100; }
     function vacio(v){ return v == null || String(v).trim() === ""; }
