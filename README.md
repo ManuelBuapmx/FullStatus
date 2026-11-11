@@ -142,6 +142,13 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-11 (tarde) — Calificaciones: el examen automático ya no pierde alumnos con el nombre escrito distinto
+
+- **Falla encontrada:** Dimas Juárez (examen 40/40 guardado a las 9:17) y Karla Pérez (26/40) no se capturaron solos. En el examen escribieron su nombre distinto al de la lista (JUAREZ/JUARES, MARTINEZ/MATINEZ). El empate por matrícula depende de la lectura `consultar_matriculas`; si no estaba disponible, `aplicarExamenesAuto` caía a nombre **exacto** y fallaba en silencio (comprobado con los datos reales: el código anterior daba 5 capturados y 4 sin examen, el nuevo 7 y 2).
+- **Cambio en `aplicarExamenesAuto` (`app.js`):** el empate va por pasos: 1) matrícula resuelta, 2) matrícula «posible» sugerida por el servidor, 3) nombre exacto, 4) nombre casi igual (distancia de edición ≤ 2, único, mismo grupo, sin examen ya usado por otro). Un examen con la matrícula de otro alumno del grupo nunca se asigna por nombre. La consulta de `resultados` ahora pide también `grupo`.
+- **Avisos en la línea «Exámen automático»:** exámenes terminados del grupo que no se pudieron relacionar con nadie (nombre y matrícula), calificaciones capturadas a mano distintas de la del examen, y si las matrículas no se pudieron leer (se relaciona solo por nombre). Antes el hueco pasaba sin avisar.
+- **Probado solo con `node`** simulando los datos reales de hoy (matrículas cargadas, sin caché, con error de lectura, calificación manual distinta, examen sin dueño, examen de otro grupo). No se probó en Electron.
+
 ### 2026-11-10 (noche) — Exámenes: aviso cuando Supabase no devuelve materias
 
 - La tarjeta «Destino del examen» muestra un aviso en rojo si la lectura de `materias` devuelve 0 filas (la lista cae al respaldo de los grupos). Sirve para detectar sesión sin permisos de administrador o tabla vacía (`supabase-examenes.js`).

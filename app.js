@@ -2351,7 +2351,7 @@
       if(materias && materias.sinSesion){
         examAuto.estado = "sinSesion"; examAuto.msg = "Inicia sesión en ☁ Alumnos (administrador) para traer las calificaciones de los exámenes.";
       } else {
-        var filas = await api.rest("resultados?select=matricula,nombre,correctas,total,materia_id,creado_en&order=creado_en.desc&limit=3000");
+        var filas = await api.rest("resultados?select=matricula,nombre,grupo,correctas,total,materia_id,creado_en&order=creado_en.desc&limit=3000");
         // Solo materia y sección de las preguntas activas (NUNCA la respuesta correcta): sirve para saber la unidad
         // de un examen cuya materia no lleva «Unidad N» en el nombre.
         var preg = [];
@@ -2413,17 +2413,79 @@
     });
 
     var cacheM = matPorGrupo[g.id];
+    var matOk = !!(cacheM && cacheM.estado === "ok");
+    var grupoClave = claveTexto(g.grupoBase || g.nombre).replace(/ /g, "");
+    res.matriculas = cacheM ? cacheM.estado : "idle";
+    res.matMsg = cacheM && cacheM.msg || "";
+    res.sinRelacionar = []; res.manualesDif = [];
+    candidatos.forEach(function(c){
+      c.k = claveTexto(c.f.nombre);
+      c.m = c.f.matricula == null ? "" : String(c.f.matricula).trim();
+      c.gk = claveTexto(c.f.grupo).replace(/ /g, "");
+    });
+    // matrícula -> alumno de ESTE grupo (la que ya resolvió el servidor por nombre exacto).
+    var matDe = {}, dueno = {};
     g.estudiantes.forEach(function(e){
-      var fm = cacheM && cacheM.estado === "ok" ? cacheM.filas[e.id] : null;
-      var mat = fm && fm.estado === "ok" ? fm.matricula : "";
-      var nk = claveTexto(e.nombre);
-      var mejor = null;
+      var fm = matOk ? cacheM.filas[e.id] : null;
+      if(fm && fm.estado === "ok" && fm.matricula){ matDe[e.id] = String(fm.matricula); dueno[String(fm.matricula)] = e.id; }
+    });
+    // Un examen con la matrícula de OTRO alumno del grupo nunca se le asigna a este por nombre.
+    function esDeOtro(c, e){ return !!(c.m && dueno[c.m] && dueno[c.m] !== e.id); }
+    // Distancia de edición (para tolerar errores de dedo al escribir el nombre: Juarez/Juares, Martinez/Matinez).
+    function distancia(a, b){
+      if(a === b) return 0;
+      if(Math.abs(a.length - b.length) > 3) return 99;
+      var prev = [], cur = [], i, j;
+      for(j = 0; j <= b.length; j++) prev[j] = j;
+      for(i = 1; i <= a.length; i++){
+        cur = [i];
+        for(j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a.charAt(i-1) === b.charAt(j-1) ? 0 : 1));
+        prev = cur;
+      }
+      return prev[b.length];
+    }
+    var usados = [], porAlumno = {};
+    // Pasada A: 1) matrícula resuelta, 2) matrícula sugerida por el servidor, 3) nombre exacto.
+    g.estudiantes.forEach(function(e){
+      var fm = matOk ? cacheM.filas[e.id] : null;
+      var mat = matDe[e.id] || "";
+      var sug = fm && fm.estado === "posible" && fm.matricula ? String(fm.matricula) : "";
+      var nk = claveTexto(e.nombre), lista = [];
+      if(mat) lista = candidatos.filter(function(c){ return c.m === mat; });
+      else if(sug) lista = candidatos.filter(function(c){ return c.m === sug && !esDeOtro(c, e); });
+      if(!lista.length) lista = candidatos.filter(function(c){ return c.k === nk && !esDeOtro(c, e); });
+      if(lista.length){ porAlumno[e.id] = lista; lista.forEach(function(c){ if(usados.indexOf(c) < 0) usados.push(c); }); }
+    });
+    // Pasada B: alumnos sin nada todavía y sin matrícula resuelta -> nombre casi igual (distancia <= 2), único y del mismo grupo.
+    var propuestas = [];
+    g.estudiantes.forEach(function(e){
+      if(porAlumno[e.id] || matDe[e.id]) return;
+      var nk = claveTexto(e.nombre); if(nk.length < 8) return;
+      var mejores = [];
       candidatos.forEach(function(c){
-        var coincide = mat ? c.f.matricula === mat : claveTexto(c.f.nombre) === nk;
-        if(!coincide) return;
+        if(usados.indexOf(c) >= 0 || esDeOtro(c, e) || (c.gk && c.gk !== grupoClave)) return;
+        var d = distancia(c.k, nk);
+        if(d <= 2) mejores.push({c: c, d: d});
+      });
+      if(!mejores.length) return;
+      mejores.sort(function(x, y){ return x.d - y.d; });
+      // Todos los intentos del mismo alumno (misma matrícula) cuentan como uno; si hay dos personas distintas igual de cerca, no se adivina.
+      var m0 = mejores[0].c.m, otra = mejores.some(function(x){ return x.d === mejores[0].d && x.c.m !== m0; });
+      if(!otra) propuestas.push({e: e, lista: mejores.filter(function(x){ return x.c.m === m0; }).map(function(x){ return x.c; })});
+    });
+    propuestas.forEach(function(pr){
+      var choque = propuestas.some(function(o){ return o !== pr && o.lista[0].m === pr.lista[0].m; });
+      if(choque) return;
+      porAlumno[pr.e.id] = pr.lista; pr.lista.forEach(function(c){ if(usados.indexOf(c) < 0) usados.push(c); });
+    });
+
+    g.estudiantes.forEach(function(e){
+      var lista = porAlumno[e.id];
+      if(!lista || !lista.length){ res.sinResultado++; return; }
+      var mejor = null;
+      lista.forEach(function(c){
         if(!mejor || c.rango > mejor.rango || (c.rango === mejor.rango && String(c.f.creado_en) > String(mejor.f.creado_en))) mejor = c;
       });
-      if(!mejor){ res.sinResultado++; return; }
 
       var cfg = configColumna(datos, "examen");
       var frac = mejor.f.correctas / mejor.f.total, valor;
@@ -2448,8 +2510,20 @@
         if(datos.autoExamen[e.id] !== txt){ datos.autoExamen[e.id] = txt; cambio = true; }
         res.rellenadas++;
         res.info[e.id] = {correctas: mejor.f.correctas, total: mejor.f.total, nombre: mejor.nombre, tipo: EXAM_TIPOS[mejor.rango] || ""};
-      } else res.manuales++;
+      } else {
+        res.manuales++;
+        if(numCalif(actual) !== numCalif(txt)) res.manualesDif.push({nombre: e.nombre, actual: String(actual), examen: txt});
+      }
     });
+    // Exámenes terminados de ESTE grupo que no se pudieron relacionar con ningún alumno de la lista (no se calla el hueco).
+    if(!cacheM || cacheM.estado !== "cargando"){
+      var vistos = {};
+      candidatos.forEach(function(c){
+        if(usados.indexOf(c) >= 0 || (c.gk && c.gk !== grupoClave)) return;
+        var id = c.m || c.k; if(vistos[id]) return; vistos[id] = true;
+        res.sinRelacionar.push({nombre: c.f.nombre, matricula: c.m, correctas: c.f.correctas, total: c.f.total});
+      });
+    }
     if(cambio) guardarCalificaciones();
     return res;
   }
@@ -2459,7 +2533,19 @@
       var t = "Exámen automático: " + r.rellenadas + " calificación(es) tomada(s) del examen ordinario (valen " + puntos + " pts)";
       t += " · " + r.sinResultado + " sin examen de esta unidad";
       if(r.manuales) t += " · " + r.manuales + " capturada(s) a mano (no se tocan)";
-      return t + ".";
+      t += ".";
+      if(r.matriculas && r.matriculas !== "ok" && r.matriculas !== "cargando" && r.matriculas !== "idle")
+        t += " ⚠ No se pudieron leer las matrículas (" + (r.matMsg || r.matriculas) + "): se relaciona solo por nombre.";
+      if(r.sinRelacionar && r.sinRelacionar.length){
+        t += " ⚠ " + r.sinRelacionar.length + " examen(es) terminado(s) sin relacionar con ningún alumno de la lista: "
+          + r.sinRelacionar.map(function(x){ return x.nombre + (x.matricula ? " (" + x.matricula + ")" : "") + " " + x.correctas + "/" + x.total; }).join("; ")
+          + ". Revisa que su nombre o matrícula coincida con la lista.";
+      }
+      if(r.manualesDif && r.manualesDif.length){
+        t += " ⚠ Capturada(s) a mano distinta(s) del examen: "
+          + r.manualesDif.map(function(x){ return x.nombre + " (tiene " + x.actual + ", el examen da " + x.examen + ")"; }).join("; ") + ".";
+      }
+      return t;
     }
     if(r.estado === "idle" || r.estado === "cargando") return "Consultando los exámenes de los alumnos…";
     return examAuto.msg || "No se pudieron consultar los exámenes.";
