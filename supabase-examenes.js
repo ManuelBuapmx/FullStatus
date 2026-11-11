@@ -35,8 +35,9 @@
      admin.html y la pestaña Resultados (que ya muestra el nombre de la materia como «Tipo de examen»)
      funcionan sin cambios ni migraciones en la base.
    - Reemplazar solo desactiva las preguntas ACTIVAS DE LA MISMA UNIDAD; las otras unidades no se tocan.
-   - Cada examen (unidad) es independiente: sus números de orden continúan después de los de las otras
-     unidades de la materia, así nunca se encima ni se mezcla con otra unidad.
+   - Cada examen (unidad de una materia/tipo) es independiente y su numeración empieza en 1. Si la
+     unidad todavía no tiene preguntas activas no se pregunta nada (no hay qué reemplazar); la opción
+     Reemplazar/Agregar solo aparece cuando ya hay un examen activo en esa unidad.
    ============================================================================ */
 (function () {
   'use strict';
@@ -455,15 +456,13 @@
   function subirExamen(api, mid, preguntas, modo, existentes, seccion) {
     var etapa = 'insertar';
     var activasViejas = (existentes || []).filter(function (q) { return q.activa && (seccion === undefined || q.seccion === seccion); }).map(function (q) { return q.id; });
-    // Orden de las preguntas nuevas: cada examen (unidad) es independiente de los demás, así que sus
-    // números nunca se encimen con los de otra unidad de la materia.
-    //  - Agregar: continúa después del orden más alto de TODA la materia.
-    //  - Reemplazar: continúa después del orden más alto de las OTRAS unidades (las de esta unidad se
-    //    desactivan, así que no cuentan). Sin "seccion" (uso antiguo) se reinicia desde 1.
+    // Orden de las preguntas nuevas: cada examen (unidad de una materia/tipo) es independiente y su
+    // numeración empieza en 1.
+    //  - Reemplazar (o primera subida): empieza en 1; las anteriores de la unidad se desactivan.
+    //  - Agregar: continúa después del orden más alto de ESA unidad (sin \"seccion\": de la materia).
     var offset = 0;
-    (existentes || []).forEach(function (q) {
-      var cuenta = modo === 'agregar' || (seccion !== undefined && q.seccion !== seccion);
-      if (cuenta && q.orden > offset) offset = q.orden;
+    if (modo === 'agregar') (existentes || []).forEach(function (q) {
+      if ((seccion === undefined || q.seccion === seccion) && q.orden > offset) offset = q.orden;
     });
     var reemplaza = modo === 'reemplazar';
     var filas = preguntas.map(function (p) {
@@ -718,6 +717,14 @@
     ]);
   }
 
+  // ¿Esa unidad ya tiene un examen activo? Solo entonces tiene sentido elegir Reemplazar o Agregar.
+  function activasDeLaUnidad() {
+    var sec = seccionDestino();
+    return (est.existentes || []).filter(function (q) { return q.activa && q.seccion === sec; }).length;
+  }
+  // Sin examen activo en la unidad no hay qué reemplazar: se sube directo (equivale a Reemplazar).
+  function modoEfectivo() { return activasDeLaUnidad() > 0 ? est.modo : 'reemplazar'; }
+
   function vistaSubida() {
     var lista = est.preview, errores = lista.filter(function (p) { return p._error; }).length;
     var puede = !errores && lista.length > 0 && !!est.materiaNombre && !est.ocupado;
@@ -737,18 +744,20 @@
     var partes = [
       h('h2', { text: 'Subir a «' + nombreDestino() + '» · ' + seccionDestino() }),
       h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Todas las preguntas se guardarán en la ' + seccionDestino() + ' (las secciones del script no se usan como unidad).' }),
-      opcion('reemplazar', 'Reemplazar el examen activo de esta unidad (sus preguntas activas actuales se desactivan, no se borran; las otras unidades no se tocan)'),
-      opcion('agregar', 'Agregar al final de las preguntas de la materia'),
+      activasDeLaUnidad() > 0 ? h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Esta unidad ya tiene ' + activasDeLaUnidad() + ' pregunta(s) activa(s). Elige qué hacer:' }) : null,
+      activasDeLaUnidad() > 0 ? opcion('reemplazar', 'Reemplazar el examen de esta unidad (sus preguntas activas actuales se desactivan, no se borran; la numeración empieza en 1; las otras unidades no se tocan)') : null,
+      activasDeLaUnidad() > 0 ? opcion('agregar', 'Agregar al final de esta unidad') : null,
       h('div', { 'class': 'row', style: 'margin-top:12px' }, [subir]),
       errores ? h('p', { 'class': 'helptext', text: 'Corrige el script y vuelve a analizar: no se puede subir con preguntas con error.' }) : null
     ];
     if (est.confirmando) {
       var sec = seccionDestino(), existentes = est.existentes || [];
       var act = existentes.filter(function (q) { return q.activa && q.seccion === sec; }).length;
-      var dup = est.modo === 'agregar' ? contarDuplicados(lista, existentes, sec) : 0;
+      var modo = modoEfectivo();
+      var dup = modo === 'agregar' ? contarDuplicados(lista, existentes, sec) : 0;
       var resumen = 'Vas a subir ' + lista.length + ' pregunta(s) a «' + nombreDestino() + '» (' + sec + '). '
         + (est.materiaId ? '' : 'La materia todavía no existe: se creará DESACTIVADA. ')
-        + (est.modo === 'reemplazar' ? 'Se desactivarán ' + act + ' pregunta(s) activa(s) de esta unidad. ' : 'Se agregarán después de las ' + existentes.length + ' existentes de la materia. ')
+        + (modo === 'reemplazar' ? (act ? 'Se desactivarán ' + act + ' pregunta(s) activa(s) de esta unidad. ' : '') + 'La numeración empieza en 1. ' : 'Se agregarán al final de esta unidad. ')
         + (dup ? '⚠ ' + dup + ' ya existen activas con el mismo texto en esta unidad (quedarían duplicadas). ' : '')
         + 'No lo hagas mientras haya alumnos contestando: se calificaría mal.';
       partes.push(h('div', { style: 'border:1px solid var(--brand-accent);border-radius:8px;padding:12px;margin-top:14px;background:var(--accent-soft)' }, [
@@ -756,7 +765,7 @@
         h('div', { 'class': 'row' }, [
           boton('Sí, subir ahora', '', function () {
             est.confirmando = false; est.err = ''; est.ocupado = 'Subiendo...'; pintar();
-            var destino = nombreDestino(), creada = !est.materiaId, modo = est.modo;
+            var destino = nombreDestino(), creada = !est.materiaId, modo = modoEfectivo();
             // Si la materia destino no existe se crea primero (desactivada); luego se suben las preguntas.
             var preparar = creada ? crearMateriaDestino(destino) : Promise.resolve(Number(est.materiaId));
             preparar.then(function (mid) { return subirExamen(rest, mid, lista, modo, creada ? [] : existentes, sec); })
