@@ -500,12 +500,9 @@
         var cacheEst = asegurarMatriculas(g2, true);
         if(cacheEst){
           if(cacheEst.estado === "ok"){
-            var conE = 0, sinE = 0, parE = 0;
-            g2.estudiantes.forEach(function(e){
-              var fE = cacheEst.filas[e.id];
-              if(tieneMatricula(cacheEst, e)) conE++; else if(fE && fE.estado === "posible") parE++; else sinE++;
-            });
-            html += '<p class="helptext" style="margin:0 0 6px;">'+conE+' con matrícula · '+sinE+' sin matrícula'+(parE ? ' · <b style="color:var(--retardo);">'+parE+' con nombre distinto al de Supabase</b> (no se les publican asistencias ni calificaciones hasta corregirlo)' : '')+' <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></p>';
+            var conE = 0, sinE = 0;
+            g2.estudiantes.forEach(function(e){ if(tieneMatricula(cacheEst, e)) conE++; else sinE++; });
+            html += '<p class="helptext" style="margin:0 0 6px;">'+conE+' con matrícula · '+sinE+' sin matrícula <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></p>';
           } else if(cacheEst.estado === "cargando"){
             html += '<p class="helptext" style="margin:0 0 6px;">Consultando matrículas…</p>';
           } else {
@@ -523,7 +520,7 @@
             html += '<span class="est-acciones"><button class="btn" data-guardar-mat="'+esc(e.id)+'"'+(matGuardando?' disabled':'')+'>'+(matGuardando?"Guardando…":"Guardar")+'</button>';
             html += '<button class="btn secondary" data-cancelar-mat="1"'+(matGuardando?' disabled':'')+'>Cancelar</button></span>';
           } else {
-            html += '<span class="est-mat">'+(cacheEst && cacheEst.estado === "cargando" ? '<span class="helptext" style="margin:0;">…</span>' : celdaMatriculaHtml(cacheEst, e, true))+'</span>';
+            html += '<span class="est-mat">'+(cacheEst && cacheEst.estado === "cargando" ? '<span class="helptext" style="margin:0;">…</span>' : celdaMatriculaHtml(cacheEst, e))+'</span>';
             html += '<span class="est-acciones">';
             if(fm && (fm.estado === "ok" || fm.estado === "sin")){
               html += '<button class="btn secondary" data-editar-mat="'+esc(e.id)+'">Editar</button>';
@@ -747,7 +744,11 @@
           p_alumnos: g.estudiantes.map(function(e){ return {id: String(e.id), nombre: e.nombre}; })
         });
         if(res && res.sinSesion){ entrada.estado = "sinSesion"; entrada.msg = "Inicia sesión en ☁ Alumnos para ver las matrículas."; }
-        else { entrada.estado = "ok"; (res || []).forEach(function(f){ entrada.filas[f.id] = f; }); }
+        else {
+          entrada.estado = "ok";
+          // Las sugerencias de «nombre parecido» del servidor no se muestran: cuenta como «sin matrícula».
+          (res || []).forEach(function(f){ entrada.filas[f.id] = f.estado === "posible" ? {id: f.id, nombre: f.nombre, estado: "sin"} : f; });
+        }
       }
     } catch(err){ entrada.estado = "error"; entrada.msg = "No se pudo consultar: " + (err && err.message || err); }
     render();
@@ -798,17 +799,10 @@
     var f = cache && cache.estado === "ok" ? cache.filas[e.id] : null;
     return !!(f && f.estado === "ok");
   }
-  function celdaMatriculaHtml(cache, e, largo){
+  function celdaMatriculaHtml(cache, e){
     var f = cache && cache.estado === "ok" ? cache.filas[e.id] : null;
     if(f && f.estado === "ok") return esc(f.matricula);
     if(f && f.estado === "ambiguo") return '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
-    // PRISMAL MESH: el servidor encontró en Supabase un alumno del mismo grupo con un nombre casi igual (error de
-    // captura). Con el nombre distinto no se publican sus asistencias ni calificaciones: hay que igualar el nombre (Excel o Supabase).
-    if(f && f.estado === "posible"){
-      var tip = "En Supabase aparece como «" + (f.nombre_sugerido || "") + "» (" + (f.matricula || "") + "). Con el nombre distinto no se publican sus asistencias ni calificaciones.";
-      if(largo) return '<span style="color:var(--retardo);display:inline-block;white-space:normal;line-height:1.25;" title="'+esc(tip)+'">⚠ ¿Es «'+esc(f.nombre_sugerido || "")+'»?<br>'+esc(f.matricula || "")+'</span>';
-      return '<span style="color:var(--retardo);" title="'+esc(tip)+'">⚠ Nombre parecido · '+esc(f.matricula || "")+'</span>';
-    }
     if(f) return '<span style="color:var(--falta);">Sin matrícula</span>';
     return "";
   }
@@ -876,9 +870,9 @@
     html += '<button class="link-sutil" id="btnToggleMatriculas" aria-expanded="'+(matVisible?"true":"false")+'">Matrícula '+(matVisible?"▾":"▸")+'</button>';
     if(matVisible && cache){
       if(cache.estado === "ok"){
-        var conM = 0, sinM = 0, posM = 0;
-        g.estudiantes.forEach(function(e){ var f = cache.filas[e.id]; if(f && f.estado === "ok") conM++; else { sinM++; if(f && f.estado === "posible") posM++; } });
-        html += '<span class="helptext" style="margin:0;">'+conM+' con matrícula · '+sinM+' sin matrícula'+(posM ? ' ('+posM+' con nombre casi igual)' : '')+' <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></span>';
+        var conM = 0, sinM = 0;
+        g.estudiantes.forEach(function(e){ var f = cache.filas[e.id]; if(f && f.estado === "ok") conM++; else sinM++; });
+        html += '<span class="helptext" style="margin:0;">'+conM+' con matrícula · '+sinM+' sin matrícula <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></span>';
       } else if(cache.estado === "cargando"){
         html += '<span class="helptext" style="margin:0;">Consultando matrículas…</span>';
       } else {
@@ -895,8 +889,6 @@
         var celda = "";
         if(f && f.estado === "ok") celda = esc(f.matricula);
         else if(f && f.estado === "ambiguo") celda = '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
-        // PRISMAL MESH: nombre casi igual en Supabase (error de dedo). Se SUGIERE; solo cambia si el profesor pulsa.
-        else if(f && f.estado === "posible") celda = '<span style="color:var(--retardo);">¿Será «'+esc(f.nombre_sugerido)+'» ('+esc(f.matricula)+')?</span>';
         else if(f) celda = '<span style="color:var(--falta);">Sin matrícula</span>';
         html += '<td class="helptext" style="white-space:nowrap;">'+celda+'</td>';
       }
