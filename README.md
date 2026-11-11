@@ -140,6 +140,10 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-10 (noche) — Exámenes: aviso cuando Supabase no devuelve materias
+
+- La tarjeta «Destino del examen» muestra un aviso en rojo si la lectura de `materias` devuelve 0 filas (la lista cae al respaldo de los grupos). Sirve para detectar sesión sin permisos de administrador o tabla vacía (`supabase-examenes.js`).
+
 ### 2026-11-10 (noche) — Exámenes: la lista de materias sale de Supabase
 
 - **Falla corregida:** la lista salía de los grupos y no coincidía con FullStatus Student (aparecía «Ética» repetida, faltaba «Pedagogía» y «Inglés I» no coincidía con «INGLES 1»). Ahora sale de la tabla `materias` (materias base) y solo cae a los grupos si la tabla viene vacía (`supabase-examenes.js`).

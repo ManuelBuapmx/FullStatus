@@ -654,7 +654,11 @@
     }
     var unidades = [];
     for (var u = 1; u <= MAX_UNIDADES; u++) unidades.push({ valor: String(u), texto: 'Unidad ' + u });
-    var info = '';
+    var info = '', aviso = '';
+    // Si Supabase no devolvió ninguna materia, la lista es el respaldo (grupos): se avisa en rojo.
+    if (!est.materias.length) {
+      aviso = '⚠ Supabase devolvió 0 materias, así que esta lista es solo un respaldo con las materias de tus grupos y puede no coincidir con FullStatus Student. Revisa que la sesión de «☁ Alumnos» sea de administrador (usa «Ya inicié sesión» o vuelve a entrar) y que la tabla materias tenga filas.';
+    }
     if (est.materiaNombre) {
       if (!est.materiaId) {
         info = '«' + nombreDestino() + '» todavía no existe en Supabase: se creará desactivada al subir el examen.';
@@ -674,6 +678,7 @@
       }), est.materiaNombre, function (v) { cambio('materiaNombre', v); }),
       campoSelect('exaUnidad', 'Unidad', unidades, est.unidad, function (v) { cambio('unidad', v); }),
       campoSelect('exaTipo', 'Tipo de examen', TIPOS_EXAMEN.map(function (t) { return { valor: t, texto: t }; }), est.tipo, function (v) { cambio('tipo', v); }),
+      aviso ? h('p', { style: 'color:var(--falta);font-weight:600', text: aviso }) : null,
       info ? h('p', { 'class': 'helptext', text: info }) : null
     ]);
   }
