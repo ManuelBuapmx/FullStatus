@@ -2340,7 +2340,9 @@
   // Rellena la columna «Exámen» de la unidad con el resultado del examen de cada alumno:
   //  - Solo cuenta el examen de la MISMA materia y unidad (la unidad sale del nombre de la materia del examen o,
   //    si no la trae, de la única «Unidad N» con preguntas activas; si hay varias no se adivina).
-  //  - Si el alumno tiene varios (ordinario, remedial, extraordinario) se usa el de mayor tipo y, a igual tipo, el más reciente.
+  //  - POR AHORA SOLO CUENTA EL EXAMEN ORDINARIO (tipo 1). Remedial y extraordinarios se ignoran hasta que se definan;
+  //    para agregarlos después basta cambiar la condición «inf.rango !== 1» (el código ya sabe elegir el de mayor tipo).
+  //  - Si hubiera varios del mismo tipo se usa el más reciente.
   //  - Nunca pisa lo que el profesor escribió a mano: solo llena celdas vacías o que ya eran automáticas.
   function aplicarExamenesAuto(g, unidad){
     var res = {estado: examAuto.estado, rellenadas: 0, sinResultado: 0, manuales: 0, sinMateria: false, info: {}};
@@ -2358,6 +2360,7 @@
       if(!nom || !(f.total > 0)) return;
       var inf = infoExamen(nom);
       if(inf.base !== materiaBase) return;
+      if(inf.rango !== 1) return;   // solo ordinario por ahora
       var un = inf.unidad;
       if(un == null){
         var us = Object.keys(examAuto.unidadesMateria[f.materia_id] || {});
@@ -2411,7 +2414,7 @@
   function textoExamenesAuto(r, puntos){
     if(r.estado === "ok"){
       if(r.sinMateria) return "Este grupo no tiene materia, así que no se pueden relacionar los exámenes.";
-      var t = "Exámen automático: " + r.rellenadas + " calificación(es) tomada(s) del examen de los alumnos (valen " + puntos + " pts)";
+      var t = "Exámen automático: " + r.rellenadas + " calificación(es) tomada(s) del examen ordinario (valen " + puntos + " pts)";
       t += " · " + r.sinResultado + " sin examen de esta unidad";
       if(r.manuales) t += " · " + r.manuales + " capturada(s) a mano (no se tocan)";
       return t + ".";
