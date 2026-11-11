@@ -813,9 +813,9 @@
     html += '<button class="link-sutil" id="btnToggleMatriculas" aria-expanded="'+(matVisible?"true":"false")+'">Matrícula '+(matVisible?"▾":"▸")+'</button>';
     if(matVisible && cache){
       if(cache.estado === "ok"){
-        var conM = 0, sinM = 0;
-        g.estudiantes.forEach(function(e){ var f = cache.filas[e.id]; if(f && f.estado === "ok") conM++; else sinM++; });
-        html += '<span class="helptext" style="margin:0;">'+conM+' con matrícula · '+sinM+' sin matrícula <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></span>';
+        var conM = 0, sinM = 0, posM = 0;
+        g.estudiantes.forEach(function(e){ var f = cache.filas[e.id]; if(f && f.estado === "ok") conM++; else { sinM++; if(f && f.estado === "posible") posM++; } });
+        html += '<span class="helptext" style="margin:0;">'+conM+' con matrícula · '+sinM+' sin matrícula'+(posM ? ' ('+posM+' con nombre casi igual)' : '')+' <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></span>';
       } else if(cache.estado === "cargando"){
         html += '<span class="helptext" style="margin:0;">Consultando matrículas…</span>';
       } else {
@@ -832,6 +832,8 @@
         var celda = "";
         if(f && f.estado === "ok") celda = esc(f.matricula);
         else if(f && f.estado === "ambiguo") celda = '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
+        // PRISMAL MESH: nombre casi igual en Supabase (error de dedo). Se SUGIERE; solo cambia si el profesor pulsa.
+        else if(f && f.estado === "posible") celda = '<span style="color:var(--retardo);">¿Será «'+esc(f.nombre_sugerido)+'» ('+esc(f.matricula)+')?</span> <button class="link-sutil" data-usar-nombre="'+esc(e.id)+'">Usar este nombre</button>';
         else if(f) celda = '<span style="color:var(--falta);">Sin matrícula</span>';
         html += '<td class="helptext" style="white-space:nowrap;">'+celda+'</td>';
       }
@@ -2988,6 +2990,19 @@
     });
     var selMatFiltro = document.getElementById("selMatFiltro");
     if(selMatFiltro) selMatFiltro.addEventListener("change", function(){ matFiltro = selMatFiltro.value; render(); });
+    document.querySelectorAll("[data-usar-nombre]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var g = grupoActivo();
+        var est = g && g.estudiantes.find(function(x){ return String(x.id) === b.getAttribute("data-usar-nombre"); });
+        var f = est && matPorGrupo[g.id] && matPorGrupo[g.id].filas[est.id];
+        if(!est || !f || !f.nombre_sugerido) return;
+        if(!window.confirm("Cambiar el nombre en FullStatus:\n\n«" + est.nombre + "»  →  «" + f.nombre_sugerido + "»\n\nAsí coincidirá con su matrícula " + f.matricula + ". Si ya subiste el Excel a Drive, revisa esa fila después de actualizar.")) return;
+        est.nombre = f.nombre_sugerido;
+        delete matPorGrupo[g.id];
+        saveState(); render();
+        showToast("Nombre corregido. Publica de nuevo con ☁ Alumnos para subir sus asistencias.");
+      });
+    });
     var btnRefMat = document.getElementById("btnRefrescarMatriculas");
     if(btnRefMat) btnRefMat.addEventListener("click", function(){
       var g = grupoActivo();
