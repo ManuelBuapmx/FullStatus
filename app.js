@@ -2946,24 +2946,7 @@
         render();
       });
     });
-    // PRISMAL MESH: «Usar ese nombre» corrige el nombre del alumno en FullStatus al que tiene en Supabase.
-    // Así coincide exacto, se le asigna su matrícula y sus asistencias/calificaciones se publican solas (saveState
-    // dispara la publicación). Solo cambia el texto del nombre: el id del alumno y su historial local no se tocan.
-    document.querySelectorAll("[data-usar-nombre]").forEach(function(btn){
-      btn.addEventListener("click", function(){
-        var g = grupoActivo();
-        var est = g && g.estudiantes.find(function(e){ return e.id === btn.getAttribute("data-usar-nombre"); });
-        var cacheG = g && matPorGrupo[g.id];
-        var fila = cacheG && cacheG.estado === "ok" ? cacheG.filas[est ? est.id : ""] : null;
-        if(!g || !est || !fila || fila.estado !== "posible" || !fila.nombre_sugerido) return;
-        confirmar("Cambiar el nombre de «" + est.nombre + "» a «" + fila.nombre_sugerido + "» (matrícula " + fila.matricula + ")? Así coincide con Supabase y se le publican sus asistencias y calificaciones.", function(){
-          est.nombre = fila.nombre_sugerido;
-          matPorGrupo = {};      // vuelve a consultar las matrículas con el nombre corregido
-          saveState(); render();
-          showToast("Nombre corregido: " + est.nombre + ".");
-        });
-      });
-    });
+    // El botón «Usar ese nombre» de esta lista lo atiende el manejador [data-usar-nombre] de más abajo (el mismo de Pasar lista).
     document.querySelectorAll("[data-cancelar-mat]").forEach(function(btn){
       btn.addEventListener("click", function(){ matEdit = null; render(); });
     });
