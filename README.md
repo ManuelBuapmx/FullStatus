@@ -126,6 +126,8 @@ npm run dist:windows     # instalador de Windows (electron-builder)
 powershell -ExecutionPolicy Bypass -File .\actualizar.ps1
 # Solo probar la última versión sin instalar:
 powershell -ExecutionPolicy Bypass -File .\actualizar.ps1 -Probar
+# Doble clic: baja lo último y abre FullStatus (equivale a actualizar.ps1 -Probar):
+.\FullStatus.bat
 ```
 
 > Mantén el proyecto fuera de carpetas sincronizadas con Google Drive: causan errores EPERM al compilar con electron-builder.
