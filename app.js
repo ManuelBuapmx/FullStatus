@@ -527,8 +527,6 @@
             html += '<span class="est-acciones">';
             if(fm && (fm.estado === "ok" || fm.estado === "sin")){
               html += '<button class="btn secondary" data-editar-mat="'+esc(e.id)+'">Editar</button>';
-            } else if(fm && fm.estado === "posible"){
-              html += '<button class="btn secondary" data-usar-nombre="'+esc(e.id)+'">Usar ese nombre</button>';
             }
             html += '<button class="btn danger" data-del-estudiante="'+esc(e.id)+'">Quitar</button></span>';
           }
@@ -805,7 +803,7 @@
     if(f && f.estado === "ok") return esc(f.matricula);
     if(f && f.estado === "ambiguo") return '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
     // PRISMAL MESH: el servidor encontró en Supabase un alumno del mismo grupo con un nombre casi igual (error de
-    // captura). Con el nombre distinto no se publican sus asistencias ni calificaciones: se corrige con «Usar ese nombre».
+    // captura). Con el nombre distinto no se publican sus asistencias ni calificaciones: hay que igualar el nombre (Excel o Supabase).
     if(f && f.estado === "posible"){
       var tip = "En Supabase aparece como «" + (f.nombre_sugerido || "") + "» (" + (f.matricula || "") + "). Con el nombre distinto no se publican sus asistencias ni calificaciones.";
       if(largo) return '<span style="color:var(--retardo);display:inline-block;white-space:normal;line-height:1.25;" title="'+esc(tip)+'">⚠ ¿Es «'+esc(f.nombre_sugerido || "")+'»?<br>'+esc(f.matricula || "")+'</span>';
@@ -898,7 +896,7 @@
         if(f && f.estado === "ok") celda = esc(f.matricula);
         else if(f && f.estado === "ambiguo") celda = '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
         // PRISMAL MESH: nombre casi igual en Supabase (error de dedo). Se SUGIERE; solo cambia si el profesor pulsa.
-        else if(f && f.estado === "posible") celda = '<span style="color:var(--retardo);">¿Será «'+esc(f.nombre_sugerido)+'» ('+esc(f.matricula)+')?</span> <button class="link-sutil" data-usar-nombre="'+esc(e.id)+'">Usar este nombre</button>';
+        else if(f && f.estado === "posible") celda = '<span style="color:var(--retardo);">¿Será «'+esc(f.nombre_sugerido)+'» ('+esc(f.matricula)+')?</span>';
         else if(f) celda = '<span style="color:var(--falta);">Sin matrícula</span>';
         html += '<td class="helptext" style="white-space:nowrap;">'+celda+'</td>';
       }
@@ -2946,7 +2944,6 @@
         render();
       });
     });
-    // El botón «Usar ese nombre» de esta lista lo atiende el manejador [data-usar-nombre] de más abajo (el mismo de Pasar lista).
     document.querySelectorAll("[data-cancelar-mat]").forEach(function(btn){
       btn.addEventListener("click", function(){ matEdit = null; render(); });
     });
@@ -3084,21 +3081,6 @@
     });
     var selMatFiltro = document.getElementById("selMatFiltro");
     if(selMatFiltro) selMatFiltro.addEventListener("change", function(){ matFiltro = selMatFiltro.value; render(); });
-    document.querySelectorAll("[data-usar-nombre]").forEach(function(b){
-      b.addEventListener("click", function(){
-        var g = grupoActivo();
-        var est = g && g.estudiantes.find(function(x){ return String(x.id) === b.getAttribute("data-usar-nombre"); });
-        var f = est && matPorGrupo[g.id] && matPorGrupo[g.id].filas[est.id];
-        if(!est || !f || !f.nombre_sugerido) return;
-        confirmar("Cambiar el nombre en FullStatus: «" + est.nombre + "» → «" + f.nombre_sugerido + "». Así coincidirá con su matrícula " + f.matricula +
-          ". Si ya subiste el Excel a Drive, revisa esa fila después de actualizar.", function(){
-          est.nombre = f.nombre_sugerido;
-          delete matPorGrupo[g.id];
-          saveState(); render();
-          showToast("Nombre corregido. Publica de nuevo con ☁ Alumnos para subir sus asistencias.");
-        });
-      });
-    });
     var detCuentas = document.getElementById("detCuentas");
     if(detCuentas) detCuentas.addEventListener("toggle", function(){
       if(detCuentas.open !== cuentasAbierto){ cuentasAbierto = detCuentas.open; render(); }
