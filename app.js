@@ -1989,32 +1989,25 @@
   // RESULTADOS (Supabase, solo lectura)
   // =========================================================
   // La URL y la clave publishable son públicas por diseño; la tabla "resultados"
-  // solo se puede leer iniciando sesión como el administrador (política RLS).
+  // solo se puede leer con la sesión del administrador (política RLS).
+  // PRISMAL MESH: esta pestaña YA NO tiene su propio inicio de sesión con correo y contraseña. Lee con la
+  // sesión de administrador de «☁ Alumnos» (window.FullStatusSupabase.rest), la misma que usan Exámenes y
+  // Calificaciones. Más adelante se le dará otra forma de acceso.
   var SUPABASE_URL = "https://juvqvshcfsrtscvzluaa.supabase.co";
   var SUPABASE_KEY = "sb_publishable_IYf3ISEUGCRGKEM2Bnq1UQ_qFkBHvk5";
-  var resToken = null; // solo en memoria; nunca se guarda en disco
   var resDatos = null;
   var resMensaje = "";
   var resCargando = false;
+  var resIntentado = false;   // la primera vez que se abre la pestaña se cargan los resultados solos
   var resMateria = "", resGrupo = "", resBusqueda = "";
 
-  async function supabaseLogin(correo, contrasena){
-    var r = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
-      method: "POST",
-      headers: {"apikey": SUPABASE_KEY, "Content-Type": "application/json"},
-      body: JSON.stringify({email: correo, password: contrasena})
-    });
-    if(!r.ok) throw new Error("Correo o contraseña incorrectos.");
-    var datos = await r.json();
-    return datos.access_token;
-  }
+  // Lectura con la sesión de «☁ Alumnos». Sin sesión lanza un aviso claro; la seguridad real sigue siendo la política RLS.
   async function supabaseLeer(ruta){
-    var r = await fetch(SUPABASE_URL + "/rest/v1/" + ruta, {
-      headers: {"apikey": SUPABASE_KEY, "Authorization": "Bearer " + resToken}
-    });
-    if(r.status === 401 || r.status === 403){ resToken = null; resDatos = null; throw new Error("La sesión expiró. Inicia sesión de nuevo."); }
-    if(!r.ok) throw new Error("No se pudieron leer los resultados (HTTP " + r.status + ").");
-    return r.json();
+    var api = window.FullStatusSupabase;
+    if(!api || !api.rest) throw new Error("Falta cargar supabase-asistencias.js.");
+    var datos = await api.rest(ruta);
+    if(datos && datos.sinSesion) throw new Error("Inicia sesión en ☁ Alumnos (administrador) para ver los resultados.");
+    return datos;
   }
   async function cargarResultados(){
     resCargando = true; resMensaje = ""; render();
@@ -2059,17 +2052,9 @@
   function renderResultados(){
     var html = '<div class="card"><div class="eyebrow">Solo lectura</div><h2>Resultados de los exámenes</h2>';
     if(!navigator.onLine) return html + '<p class="empty">Sin conexión: los resultados se consultan en línea.</p></div>';
-    if(!resToken){
-      html += '<p class="helptext" style="margin-top:0;">Inicia sesión con la cuenta de administrador para ver los resultados. La contraseña no se guarda en este equipo.</p>';
-      if(resMensaje) html += '<p class="helptext" style="color:var(--falta);">'+esc(resMensaje)+'</p>';
-      html += '<div class="row" style="align-items:flex-end;">';
-      html += '<div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label for="resCorreo">Correo</label><input type="email" id="resCorreo" autocomplete="username"></div>';
-      html += '<div class="field" style="flex:1;min-width:200px;margin-bottom:0;"><label for="resClave">Contraseña</label><input type="password" id="resClave" autocomplete="current-password"></div>';
-      html += '<button class="btn" id="btnResEntrar">Entrar</button></div></div>';
-      return html;
-    }
     if(resCargando) return html + '<p class="empty">Cargando resultados…</p></div>';
     if(!resDatos){
+      if(!resIntentado){ resIntentado = true; setTimeout(cargarResultados, 0); return html + '<p class="empty">Cargando resultados…</p></div>'; }
       if(resMensaje) html += '<p class="helptext" style="color:var(--falta);">'+esc(resMensaje)+'</p>';
       return html + '<button class="btn" id="btnResActualizar">Cargar resultados</button></div>';
     }
@@ -2087,7 +2072,7 @@
     grupos.forEach(function(gr){ html += '<option value="'+esc(gr)+'" '+(gr===resGrupo?"selected":"")+'>'+esc(gr)+'</option>'; });
     html += '</select></div>';
     html += '<div class="field" style="margin-bottom:0;flex:1;min-width:180px;"><label for="inputResBuscar">Buscar</label><input type="text" id="inputResBuscar" placeholder="Nombre o matrícula" value="'+esc(resBusqueda)+'"></div>';
-    html += '<button class="btn secondary" id="btnResActualizar">Actualizar</button><button class="btn secondary" id="btnResSalir">Cerrar sesión</button></div>';
+    html += '<button class="btn secondary" id="btnResActualizar">Actualizar</button></div>';
     var enEscuela = resDatos.filas.filter(resEsDeEscuela).length, deOtros = resDatos.filas.length - enEscuela;
     html += '<p class="helptext" style="margin-top:0;">Escuela: <b>'+esc(escuelaActual.nombre)+'</b> · '+enEscuela+' resultado(s) de los grupos de esta escuela'+(deOtros ? ' ('+deOtros+' de otros grupos no se muestran)' : '')+'.</p>';
     html += '<div id="resTabla">' + htmlTablaResultados() + '</div></div>';
@@ -2718,29 +2703,8 @@
       copiarPortapapeles(filas.map(function(fila){ return fila.join("\t"); }).join("\n"));
     });
 
-    var btnResEntrar = document.getElementById("btnResEntrar");
-    if(btnResEntrar){
-      var entrar = function(){
-        var correo = document.getElementById("resCorreo").value.trim();
-        var claveInput = document.getElementById("resClave");
-        var clave = claveInput.value;
-        if(!correo || !clave){ showToast("Escribe tu correo y contraseña."); return; }
-        claveInput.value = "";
-        supabaseLogin(correo, clave).then(function(token){
-          resToken = token; resMensaje = "";
-          return cargarResultados();
-        }).catch(function(err){
-          resMensaje = err.message || "No se pudo iniciar sesión.";
-          render();
-        });
-      };
-      btnResEntrar.addEventListener("click", entrar);
-      document.getElementById("resClave").addEventListener("keydown", function(ev){ if(ev.key === "Enter") entrar(); });
-    }
     var btnResActualizar = document.getElementById("btnResActualizar");
     if(btnResActualizar) btnResActualizar.addEventListener("click", cargarResultados);
-    var btnResSalir = document.getElementById("btnResSalir");
-    if(btnResSalir) btnResSalir.addEventListener("click", function(){ resToken = null; resDatos = null; resMensaje = ""; render(); });
     var selResMateria = document.getElementById("selResMateria");
     if(selResMateria) selResMateria.addEventListener("change", function(){ resMateria = selResMateria.value; document.getElementById("resTabla").innerHTML = htmlTablaResultados(); });
     var selResGrupo = document.getElementById("selResGrupo");
