@@ -500,9 +500,12 @@
         var cacheEst = asegurarMatriculas(g2, true);
         if(cacheEst){
           if(cacheEst.estado === "ok"){
-            var conE = 0, sinE = 0;
-            g2.estudiantes.forEach(function(e){ if(tieneMatricula(cacheEst, e)) conE++; else sinE++; });
-            html += '<p class="helptext" style="margin:0 0 6px;">'+conE+' con matrícula · '+sinE+' sin matrícula <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></p>';
+            var conE = 0, sinE = 0, parE = 0;
+            g2.estudiantes.forEach(function(e){
+              var fE = cacheEst.filas[e.id];
+              if(tieneMatricula(cacheEst, e)) conE++; else if(fE && fE.estado === "posible") parE++; else sinE++;
+            });
+            html += '<p class="helptext" style="margin:0 0 6px;">'+conE+' con matrícula · '+sinE+' sin matrícula'+(parE ? ' · <b style="color:var(--retardo);">'+parE+' con nombre distinto al de Supabase</b> (no se les publican asistencias ni calificaciones hasta corregirlo)' : '')+' <button class="link-sutil" id="btnRefrescarMatriculas">Actualizar</button></p>';
           } else if(cacheEst.estado === "cargando"){
             html += '<p class="helptext" style="margin:0 0 6px;">Consultando matrículas…</p>';
           } else {
@@ -520,10 +523,12 @@
             html += '<span class="est-acciones"><button class="btn" data-guardar-mat="'+esc(e.id)+'"'+(matGuardando?' disabled':'')+'>'+(matGuardando?"Guardando…":"Guardar")+'</button>';
             html += '<button class="btn secondary" data-cancelar-mat="1"'+(matGuardando?' disabled':'')+'>Cancelar</button></span>';
           } else {
-            html += '<span class="est-mat">'+(cacheEst && cacheEst.estado === "cargando" ? '<span class="helptext" style="margin:0;">…</span>' : celdaMatriculaHtml(cacheEst, e))+'</span>';
+            html += '<span class="est-mat">'+(cacheEst && cacheEst.estado === "cargando" ? '<span class="helptext" style="margin:0;">…</span>' : celdaMatriculaHtml(cacheEst, e, true))+'</span>';
             html += '<span class="est-acciones">';
             if(fm && (fm.estado === "ok" || fm.estado === "sin")){
               html += '<button class="btn secondary" data-editar-mat="'+esc(e.id)+'">Editar</button>';
+            } else if(fm && fm.estado === "posible"){
+              html += '<button class="btn secondary" data-usar-nombre="'+esc(e.id)+'">Usar ese nombre</button>';
             }
             html += '<button class="btn danger" data-del-estudiante="'+esc(e.id)+'">Quitar</button></span>';
           }
@@ -795,10 +800,17 @@
     var f = cache && cache.estado === "ok" ? cache.filas[e.id] : null;
     return !!(f && f.estado === "ok");
   }
-  function celdaMatriculaHtml(cache, e){
+  function celdaMatriculaHtml(cache, e, largo){
     var f = cache && cache.estado === "ok" ? cache.filas[e.id] : null;
     if(f && f.estado === "ok") return esc(f.matricula);
     if(f && f.estado === "ambiguo") return '<span style="color:var(--retardo);">⚠ Varias coincidencias</span>';
+    // PRISMAL MESH: el servidor encontró en Supabase un alumno del mismo grupo con un nombre casi igual (error de
+    // captura). Con el nombre distinto no se publican sus asistencias ni calificaciones: se corrige con «Usar ese nombre».
+    if(f && f.estado === "posible"){
+      var tip = "En Supabase aparece como «" + (f.nombre_sugerido || "") + "» (" + (f.matricula || "") + "). Con el nombre distinto no se publican sus asistencias ni calificaciones.";
+      if(largo) return '<span style="color:var(--retardo);display:inline-block;white-space:normal;line-height:1.25;" title="'+esc(tip)+'">⚠ ¿Es «'+esc(f.nombre_sugerido || "")+'»?<br>'+esc(f.matricula || "")+'</span>';
+      return '<span style="color:var(--retardo);" title="'+esc(tip)+'">⚠ Nombre parecido · '+esc(f.matricula || "")+'</span>';
+    }
     if(f) return '<span style="color:var(--falta);">Sin matrícula</span>';
     return "";
   }
@@ -2932,6 +2944,24 @@
         matEdit = { gid: g.id, eid: btn.getAttribute("data-editar-mat") };
         matFoco = true;
         render();
+      });
+    });
+    // PRISMAL MESH: «Usar ese nombre» corrige el nombre del alumno en FullStatus al que tiene en Supabase.
+    // Así coincide exacto, se le asigna su matrícula y sus asistencias/calificaciones se publican solas (saveState
+    // dispara la publicación). Solo cambia el texto del nombre: el id del alumno y su historial local no se tocan.
+    document.querySelectorAll("[data-usar-nombre]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var g = grupoActivo();
+        var est = g && g.estudiantes.find(function(e){ return e.id === btn.getAttribute("data-usar-nombre"); });
+        var cacheG = g && matPorGrupo[g.id];
+        var fila = cacheG && cacheG.estado === "ok" ? cacheG.filas[est ? est.id : ""] : null;
+        if(!g || !est || !fila || fila.estado !== "posible" || !fila.nombre_sugerido) return;
+        confirmar("Cambiar el nombre de «" + est.nombre + "» a «" + fila.nombre_sugerido + "» (matrícula " + fila.matricula + ")? Así coincide con Supabase y se le publican sus asistencias y calificaciones.", function(){
+          est.nombre = fila.nombre_sugerido;
+          matPorGrupo = {};      // vuelve a consultar las matrículas con el nombre corregido
+          saveState(); render();
+          showToast("Nombre corregido: " + est.nombre + ".");
+        });
       });
     });
     document.querySelectorAll("[data-cancelar-mat]").forEach(function(btn){
