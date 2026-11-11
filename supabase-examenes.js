@@ -23,8 +23,8 @@
      DESACTIVADAS, luego se desactivan las anteriores y al final se activan las nuevas. Si algo
      falla a la mitad, el alumno nunca se queda sin examen (admin.html desactivaba primero).
    - La respuesta correcta solo se ENVÍA; este módulo nunca la vuelve a leer de la base.
-   - Una materia nueva se crea DESACTIVADA; activarla y fijar su horario o asignaciones se sigue
-     haciendo en el panel de administración (admin.html).
+   - Una materia nueva se crea ACTIVA (Supabase la activa sola con un trigger) y aparece de inmediato en
+     FullStatus Student; fijar su horario o asignaciones se sigue haciendo en el panel de administración (admin.html).
    - No usa alert()/confirm()/prompt() (Electron): la confirmación va dentro de la pestaña.
    - DESTINO DEL EXAMEN = Materia + Unidad + Tipo (10/nov/2026). La materia sale de la tabla
      `materias` de Supabase (las materias base, la misma lista que ve FullStatus Student; sin las
@@ -32,7 +32,7 @@
      Ética de los grupos (window.FullStatusMateriasGrupos, definida en app.js). La unidad se guarda en preguntas.seccion como «Unidad N» (así
      arma FullStatus Student su menú). El tipo NO es una columna nueva: «Ordinario» usa la materia
      tal cual; Remedial y Extraordinario 1, 2 o 3 van a una materia aparte llamada
-     «<Materia> · <Tipo>» (se crea desactivada). Así FullStatus Student, el horario/asignación de
+     «<Materia> · <Tipo>» (se crea activa). Así FullStatus Student, el horario/asignación de
      admin.html y la pestaña Resultados (que ya muestra el nombre de la materia como «Tipo de examen»)
      funcionan sin cambios ni migraciones en la base.
    - Reemplazar solo desactiva las preguntas ACTIVAS DE LA MISMA UNIDAD; las otras unidades no se tocan.
@@ -585,10 +585,10 @@
     est.existentes = null;
     return cargarExistentes(est.materiaId);
   }
-  // Crea la materia destino DESACTIVADA (se activa y se le fija horario en admin.html). Devuelve su id.
+  // Crea la materia destino ACTIVA (el trigger de Supabase también la activa sola; el horario se fija en admin.html). Devuelve su id.
   function crearMateriaDestino(nombre) {
     var orden = est.materias.reduce(function (mx, m) { return Math.max(mx, m.orden || 0); }, 0) + 1;
-    return escribirConfirmado(rest, 'materias?select=id', 'POST', { nombre: nombre, orden: orden, activa: false }, 1)
+    return escribirConfirmado(rest, 'materias?select=id', 'POST', { nombre: nombre, orden: orden, activa: true }, 1)
       .then(function (filas) { return Number(filas[0].id); });
   }
   function refrescar() {
@@ -661,7 +661,7 @@
     }
     if (est.materiaNombre) {
       if (!est.materiaId) {
-        info = '«' + nombreDestino() + '» todavía no existe en Supabase: se creará desactivada al subir el examen.';
+        info = '«' + nombreDestino() + '» todavía no existe en Supabase: se creará activa al subir el examen.';
       } else if (est.existentes) {
         var sec = seccionDestino();
         var deUnidad = est.existentes.filter(function (q) { return q.seccion === sec; });
@@ -784,13 +784,13 @@
           boton('Sí, subir ahora', '', function () {
             est.confirmando = false; est.err = ''; est.ocupado = 'Subiendo...'; pintar();
             var destino = nombreDestino(), creada = !est.materiaId, modo = modoEfectivo();
-            // Si la materia destino no existe se crea primero (desactivada); luego se suben las preguntas.
+            // Si la materia destino no existe se crea primero (activa); luego se suben las preguntas.
             var preparar = creada ? crearMateriaDestino(destino) : Promise.resolve(Number(est.materiaId));
             preparar.then(function (mid) { return subirExamen(rest, mid, lista, modo, creada ? [] : existentes, sec); })
               .then(function (r) {
                 est.ocupado = ''; est.preview = null; est.avisos = []; est.texto = ''; guardarBorrador();
                 est.msg = 'Listo: ' + r.subidas + ' pregunta(s) subidas a «' + destino + '» (' + sec + ')' + (r.desactivadas ? ' (se desactivaron ' + r.desactivadas + ' anteriores)' : '') + '.'
-                  + (creada ? ' La materia se creó desactivada: actívala y fija su horario en el panel de administración.' : '');
+                  + (creada ? ' La materia se creó activa y ya aparece en FullStatus Student: fija su horario en el panel de administración si lo necesitas.' : '');
                 return cargarMaterias().then(actualizarDestino);
               }).then(pintar).catch(function (e) { fallo(e, 'No se pudo subir. '); });
           }),
