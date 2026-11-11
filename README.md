@@ -140,6 +140,12 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-10 (noche) — Historial: columna «Matrícula» plegable y filtro
+
+- **Pedido:** en el Historial, una columna desplegable para verificar qué alumnos tienen matrícula y cuáles no.
+- **Cambio (`app.js`):** botón «Matrícula ▸/▾» sobre la tabla del historial (el mismo de Pasar lista; la elección abierta/cerrada se comparte y se recuerda). Abierto, agrega la columna «Matrícula» (matrícula, «Sin matrícula» o «⚠ Varias coincidencias»), el conteo «N con matrícula · N sin matrícula» y una lista para filtrar: Todos / Solo sin matrícula / Solo con matrícula. Usa la misma consulta de solo lectura (`consultar_matriculas`, coincidencia por nombre, requiere sesión de «☁ Alumnos»). Es solo visual: no cambia el Excel ni lo que se copia/descarga. Nuevas funciones: `asegurarMatriculas`, `tieneMatricula`, `celdaMatriculaHtml`; variable `matFiltro`. Las «Varias coincidencias» cuentan como «sin matrícula» en el conteo y el filtro.
+- **Sin probar en Electron con Supabase real.**
+
 ### 2026-11-10 (noche) — Exámenes: cada examen empieza en 1 y sin «Reemplazar» si no hay nada que reemplazar
 
 - **Cambio:** la numeración de cada examen (unidad de una materia/tipo) empieza en 1, sin depender de otras unidades. Si la unidad no tiene preguntas activas se sube directo; *Reemplazar*/*Agregar* solo se ofrece cuando ya hay un examen activo ahí (`supabase-examenes.js`).
