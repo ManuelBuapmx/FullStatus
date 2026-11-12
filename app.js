@@ -2162,6 +2162,8 @@
   ];
   var califDatos = cargarCalificaciones();
   var calUnidad = "";
+  // PRISMAL MESH: «Pegar participaciones desde Excel» (Calificaciones). Texto pegado y resultado del último intento.
+  var pegarPartic = "", pegarPartMsg = "", pegarPartAbierto = false;
   // PRISMAL MESH: calificación del examen que se rellena sola. Lee de Supabase (misma sesión de administrador)
   // los resultados de los exámenes que contestaron los alumnos en FullStatus Student y los pasa a la columna
   // «Exámen» de la unidad, en el modo de captura de esa columna (0-10, % o escala). Los puntos con su
@@ -2569,6 +2571,64 @@
       if(inp) inp.placeholder = "Auto (" + r.escala[col.campo].auto + ")";
     });
   }
+  // ---- Pegar participaciones desde Excel ----
+  // Cada línea: nombre + número de participaciones (separados por tabulador, coma o punto y coma; sirve pegar celdas de
+  // Excel o un CSV con más columnas: el nombre es el campo con más letras y el número, el último). Se asigna por nombre a los
+  // alumnos del grupo a la vista y se escribe en la columna «Partic.» de la unidad a la vista.
+  function distanciaEdicion(a, b){
+    if(a === b) return 0;
+    if(Math.abs(a.length - b.length) > 3) return 99;
+    var prev = [], cur, i, j;
+    for(j = 0; j <= b.length; j++) prev[j] = j;
+    for(i = 1; i <= a.length; i++){
+      cur = [i];
+      for(j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a.charAt(i-1) === b.charAt(j-1) ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  // Mismo alumno aunque cambie el orden de las palabras, falte alguna (≥3 palabras) o haya un error de dedo (distancia ≤ 2).
+  // Solo devuelve un alumno si es único; ante la duda devuelve null.
+  function emparejarNombreEstudiante(g, nombre){
+    var k = claveTexto(nombre); if(!k) return null;
+    var pal = k.split(" ").sort(), kord = pal.join(" ");
+    var lista = g.estudiantes.map(function(e){
+      var ke = claveTexto(e.nombre), pe = ke.split(" ").sort();
+      return {e: e, k: ke, pal: pe, kord: pe.join(" ")};
+    });
+    var r = lista.filter(function(x){ return x.k === k; });
+    if(r.length === 1) return r[0].e;
+    r = lista.filter(function(x){ return x.kord === kord; });
+    if(r.length === 1) return r[0].e;
+    r = lista.filter(function(x){
+      var cont = function(grande, chico){ return chico.length >= 3 && chico.every(function(w){ return grande.indexOf(w) >= 0; }); };
+      return cont(x.pal, pal) || cont(pal, x.pal);
+    });
+    if(r.length === 1) return r[0].e;
+    if(k.length >= 8){
+      r = lista.filter(function(x){ return distanciaEdicion(x.kord, kord) <= 2; });
+      if(r.length === 1) return r[0].e;
+    }
+    return null;
+  }
+  function planPegarPartic(g, texto){
+    var plan = {asig: [], sinAlumno: [], invalidas: [], repetidos: []}, usados = {};
+    String(texto || "").split(/\r?\n/).forEach(function(linea){
+      var l = linea.trim(); if(!l) return;
+      var campos = l.split(/\t|;|,/).map(function(x){ return x.trim(); }).filter(function(x){ return x !== ""; });
+      var letras = function(t){ return (t.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length; };
+      if(campos.length < 2){ plan.invalidas.push(l); return; }
+      var ultimo = campos[campos.length - 1];
+      if(!/^\d+([.,]\d+)?$/.test(ultimo)){ if(!/partic/i.test(l)) plan.invalidas.push(l); return; }   // el encabezado se ignora
+      var nombre = campos.slice(0, -1).sort(function(a, b){ return letras(b) - letras(a); })[0];
+      var e = emparejarNombreEstudiante(g, nombre);
+      if(!e){ plan.sinAlumno.push(nombre); return; }
+      if(usados[e.id]){ plan.repetidos.push(nombre); return; }
+      usados[e.id] = true;
+      plan.asig.push({e: e, nombre: nombre, valor: parseFloat(ultimo.replace(",", "."))});
+    });
+    return plan;
+  }
   function renderCalificaciones(){
     var g = grupoActivo();
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
@@ -2635,6 +2695,13 @@
       }
     });
     html += '</div></div>';
+
+    html += '<div class="card compacta"><details id="detPegarPartic"'+(pegarPartAbierto ? ' open' : '')+'><summary style="cursor:pointer;font-weight:600;">Pegar participaciones desde Excel</summary>';
+    html += '<p class="helptext">Pega una línea por alumno con su nombre y su número de participaciones (celdas copiadas de Excel o un CSV). Se asignan por nombre a los alumnos de este grupo y se escriben en la columna «Partic.» de <b>'+esc(unidad.nombre)+'</b>.</p>';
+    html += '<textarea id="txtPegarPartic" rows="7" style="width:100%;font-family:inherit;" placeholder="APOLINAR MALDONADO ALEJANDRA MARLENE&#9;2">'+esc(pegarPartic)+'</textarea>';
+    html += '<div class="row" style="margin-top:8px;"><button class="btn" id="btnAplicarPartic">Aplicar a '+esc(unidad.nombre)+'</button></div>';
+    if(pegarPartMsg) html += '<p class="helptext" style="margin-top:8px;white-space:pre-line;">'+esc(pegarPartMsg)+'</p>';
+    html += '</details></div>';
 
     html += '<div class="card compacta">';
     if(g.estudiantes.length === 0){
@@ -2807,6 +2874,44 @@
       examAuto.estado = "idle";
       var g = grupoActivo(); if(g) delete matPorGrupo[g.id];
       render();
+    });
+    var detPegar = document.getElementById("detPegarPartic");
+    if(detPegar) detPegar.addEventListener("toggle", function(){ pegarPartAbierto = detPegar.open; });
+    var txtPegar = document.getElementById("txtPegarPartic");
+    if(txtPegar) txtPegar.addEventListener("input", function(){ pegarPartic = txtPegar.value; });
+    var btnAplicarPartic = document.getElementById("btnAplicarPartic");
+    if(btnAplicarPartic) btnAplicarPartic.addEventListener("click", function(){
+      var g2 = grupoActivo(), u2 = g2 && unidadCalifActual(g2);
+      if(!g2 || !u2) return;
+      var plan = planPegarPartic(g2, txtPegar ? txtPegar.value : pegarPartic);
+      pegarPartAbierto = true;
+      if(!plan.asig.length){
+        pegarPartMsg = "No se asignó nada: no encontré líneas con nombre y número que coincidan con alumnos de este grupo."
+          + (plan.sinAlumno.length ? "\nSin alumno en este grupo: " + plan.sinAlumno.join(", ") : "");
+        render(); return;
+      }
+      var datos = califBucket(g2.id, u2.id), pisar = 0;
+      plan.asig.forEach(function(a){
+        var ant = (datos.alumnos[a.e.id] || {}).partic;
+        if(!(ant == null || String(ant).trim() === "") && numCalif(ant) !== a.valor) pisar++;
+      });
+      function aplicar(){
+        plan.asig.forEach(function(a){
+          if(!datos.alumnos[a.e.id]) datos.alumnos[a.e.id] = {};
+          datos.alumnos[a.e.id].partic = String(a.valor);
+        });
+        guardarCalificaciones();
+        var modo = configColumna(datos, "partic").modo;
+        var m = "Listo: " + plan.asig.length + " participaciones asignadas en " + u2.nombre + " de " + g2.nombre + ".";
+        if(plan.sinAlumno.length) m += "\nSin alumno en este grupo (no se asignaron): " + plan.sinAlumno.join(", ") + ".";
+        if(plan.repetidos.length) m += "\nRepetidos (se usó la primera línea): " + plan.repetidos.join(", ") + ".";
+        if(plan.invalidas.length) m += "\nLíneas que no pude leer: " + plan.invalidas.length + ".";
+        if(modo !== "escala") m += "\nOjo: la columna Partic. está en modo «" + CALIF_MODOS[modo] + "». Son conteos: cámbiala a «" + CALIF_MODOS.escala + "» para que los puntos se calculen bien.";
+        pegarPartMsg = m;
+        render();
+      }
+      if(pisar > 0) confirmar("Ya hay " + pisar + " participación(es) capturada(s) en " + u2.nombre + " que se van a reemplazar. ¿Continuar?", aplicar);
+      else aplicar();
     });
     var selModeloCalif = document.getElementById("selModeloCalif");
     if(selModeloCalif) selModeloCalif.addEventListener("change", function(){
