@@ -2162,6 +2162,9 @@
   ];
   var califDatos = cargarCalificaciones();
   var calUnidad = "";
+  // PRISMAL MESH: etapa que se está viendo en Calificaciones: "ordinario" (la tabla de siempre) o una etapa de
+  // regularización ("remedial", "ext1", "ext2", "ext3") que solo existe mientras haya alumnos reprobados que la necesiten.
+  var calEtapa = "ordinario";
   // PRISMAL MESH: calificación del examen que se rellena sola. Lee de Supabase (misma sesión de administrador)
   // los resultados de los exámenes que contestaron los alumnos en FullStatus Student y los pasa a la columna
   // «Exámen» de la unidad, en el modo de captura de esa columna (0-10, % o escala). Los puntos con su
@@ -2569,6 +2572,57 @@
       if(inp) inp.placeholder = "Auto (" + r.escala[col.campo].auto + ")";
     });
   }
+  // ---- Etapas de regularización: Remedial → Extraordinario 1 → 2 → 3 ----
+  // Reprobado en el ordinario = ya tiene examen capturado y su total queda por debajo del mínimo del modelo (CALIF_MINIMA).
+  // Cada etapa solo aparece si hay alumnos que la necesitan: la lista de Remedial son los reprobados del ordinario;
+  // la de Extraordinario 1, los que siguen por debajo del mínimo en el Remedial (con calificación ya capturada); y así hasta el 3.
+  // Las calificaciones de cada etapa se guardan en la unidad (datos.etapas[etapa][alumno]) y por ahora NO se publican.
+  var ETAPAS_CALIF = [
+    {id:"remedial", nombre:"Remedial"}, {id:"ext1", nombre:"Extraordinario 1"},
+    {id:"ext2", nombre:"Extraordinario 2"}, {id:"ext3", nombre:"Extraordinario 3"}
+  ];
+  function calificacionEtapa(datos, etapaId, estId){
+    var v = datos.etapas && datos.etapas[etapaId] ? datos.etapas[etapaId][estId] : null;
+    if(v == null || String(v).trim() === "") return null;
+    return Math.min(10, numCalif(v));
+  }
+  function listasEtapasCalif(r){
+    var min = CALIF_MINIMA[r.modeloId];
+    var actual = r.filas.filter(function(f){
+      var d = r.datos.alumnos[f.estudiante.id] || {};
+      return !(d.examen == null || String(d.examen).trim() === "") && f.total < min;
+    }).map(function(f){ return {est: f.estudiante, previa: f.total}; });
+    var listas = {}, disponibles = [];
+    ETAPAS_CALIF.forEach(function(et){
+      if(!actual.length) return;
+      listas[et.id] = actual; disponibles.push(et.id);
+      actual = actual.filter(function(x){ var n = calificacionEtapa(r.datos, et.id, x.est.id); return n != null && n < min; })
+                     .map(function(x){ return {est: x.est, previa: calificacionEtapa(r.datos, et.id, x.est.id)}; });
+    });
+    return {listas: listas, disponibles: disponibles};
+  }
+  function renderEtapaCalif(g, unidad, r, et, etapaId){
+    var min = CALIF_MINIMA[r.modeloId];
+    var idx = ETAPAS_CALIF.findIndex(function(x){ return x.id === etapaId; });
+    var etapa = ETAPAS_CALIF[idx];
+    var previaNombre = idx === 0 ? "Ordinario" : ETAPAS_CALIF[idx - 1].nombre;
+    var lista = et.listas[etapaId] || [];
+    var mapa = (r.datos.etapas && r.datos.etapas[etapaId]) || {};
+    var h = '<div class="card compacta"><h2>'+esc(etapa.nombre)+' · '+esc(unidad.nombre)+'</h2>';
+    h += '<p class="helptext" style="margin-top:0;">'+lista.length+' alumno(s) con calificación menor a '+min+' en '+esc(previaNombre)+' (mínimo aprobatorio del modelo). Captura su calificación de '+esc(etapa.nombre)+' (0-10); si sigue siendo menor a '+min+', se agrega la siguiente etapa a la lista de arriba.</p>';
+    h += '<div class="table-scroll"><table class="matriz calif"><thead><tr><th>Nombre</th><th>'+esc(previaNombre)+'</th><th>'+esc(etapa.nombre)+' (0-10)</th><th>Resultado</th></tr></thead><tbody>';
+    lista.forEach(function(x){
+      var raw = mapa[x.est.id];
+      var capturada = !(raw == null || String(raw).trim() === "");
+      var n = capturada ? Math.min(10, numCalif(raw)) : null;
+      var res = n == null ? "—" : (n >= min ? '<b style="color:#15803d;">Aprobado</b>' : '<b style="color:var(--falta);">Reprobado</b>');
+      h += '<tr><td style="text-align:left;">'+esc(x.est.nombre)+'</td><td>'+(Math.round(x.previa * 100) / 100)+'</td>'
+        + '<td><input type="text" inputmode="decimal" class="calif-input" data-calif-etapa="'+etapaId+'" data-estudiante="'+esc(x.est.id)+'" value="'+esc(capturada ? raw : "")+'"></td>'
+        + '<td>'+res+'</td></tr>';
+    });
+    h += '</tbody></table></div></div>';
+    return h;
+  }
   function renderCalificaciones(){
     var g = grupoActivo();
     if(!g) return '<div class="card"><p class="empty">Primero crea o importa un grupo en la pestaña "Grupos".</p></div>';
@@ -2588,10 +2642,20 @@
     asegurarExamenesAuto();
     var autoRes = aplicarExamenesAuto(g, unidad);
     var r = calcularCalificaciones(g, unidad);
+    var et = listasEtapasCalif(r);
+    if(calEtapa !== "ordinario" && et.disponibles.indexOf(calEtapa) < 0) calEtapa = "ordinario";
     html += '<div class="hist-toolbar">';
     html += '<div class="field" style="margin-bottom:0;"><label for="selUnidadCalif">Unidad</label><select id="selUnidadCalif">';
     unidades.forEach(function(u){
       html += '<option value="'+esc(u.id)+'" '+(u.id===unidad.id?"selected":"")+'>'+esc(u.nombre)+' ('+displayFecha(u.desde)+' - '+displayFecha(u.hasta)+')</option>';
+    });
+    html += '</select></div>';
+    // La lista de etapas se arma sola: Ordinario siempre, y Remedial / Extraordinario 1-3 solo si hay reprobados que las necesiten.
+    html += '<div class="field" style="margin-bottom:0;"><label for="selEtapaCalif">Etapa</label><select id="selEtapaCalif">';
+    html += '<option value="ordinario" '+(calEtapa==="ordinario"?"selected":"")+'>Ordinario</option>';
+    et.disponibles.forEach(function(id){
+      var nom = ETAPAS_CALIF.find(function(x){ return x.id === id; }).nombre;
+      html += '<option value="'+id+'" '+(calEtapa===id?"selected":"")+'>'+nom+'</option>';
     });
     html += '</select></div>';
     html += '<div class="field" style="margin-bottom:0;"><label for="selModeloCalif">Modelo de ponderación</label><select id="selModeloCalif">';
@@ -2603,6 +2667,7 @@
     html += '<button class="btn secondary" id="btnPdfCalif">Generar PDF</button>';
     html += '<button class="btn secondary" id="btnCopiarCalif">Copiar para pegar en Excel</button>';
     html += '</div>';
+    if(calEtapa === "ordinario"){
     html += '<div class="hist-legend">';
     html += '<span><b style="background:'+CALIF_COLORES.trab+';color:#000;width:auto;padding:0 10px;border-radius:12px;">Saber hacer '+r.modelo.pesos.hacer+'%</b> Trabajos en clase ('+r.puntos.trab+' pts)</span>';
     html += '<span><b style="background:'+CALIF_COLORES.examen+';color:#000;width:auto;padding:0 10px;border-radius:12px;">Saber '+r.modelo.pesos.saber+'%</b> Exámen ('+r.puntos.examen+' pts)</span>';
@@ -2610,7 +2675,9 @@
     html += '</div>';
     html += '<p class="helptext hist-rule">El extra suma o resta puntos directos y el total máximo es 10. La asistencia se calcula sola desde el historial.</p>';
     html += '<p class="helptext" style="margin-top:4px;">'+esc(textoExamenesAuto(autoRes, r.puntos.examen))+' <button class="link-sutil" id="btnActualizarExamenes">Actualizar exámenes</button></p>';
+    }
     html += '</div>';
+    if(calEtapa !== "ordinario") return html + renderEtapaCalif(g, unidad, r, et, calEtapa);
 
     // Cuadro aparte: cuántas asistencias, participaciones y trabajos hubo en el periodo.
     html += '<div class="card compacta"><h2>Resumen del periodo</h2><div class="hist-summary">';
@@ -2759,9 +2826,26 @@
   function attachHandlers(){
     // Calificaciones
     var selGrupoCalif = document.getElementById("selGrupoCalif");
-    if(selGrupoCalif) selGrupoCalif.addEventListener("change", function(){ state.grupoActivoId = selGrupoCalif.value; calUnidad = ""; saveState(false); render(); });
+    if(selGrupoCalif) selGrupoCalif.addEventListener("change", function(){ state.grupoActivoId = selGrupoCalif.value; calUnidad = ""; calEtapa = "ordinario"; saveState(false); render(); });
     var selUnidadCalif = document.getElementById("selUnidadCalif");
-    if(selUnidadCalif) selUnidadCalif.addEventListener("change", function(){ calUnidad = selUnidadCalif.value; render(); });
+    if(selUnidadCalif) selUnidadCalif.addEventListener("change", function(){ calUnidad = selUnidadCalif.value; calEtapa = "ordinario"; render(); });
+    var selEtapaCalif = document.getElementById("selEtapaCalif");
+    if(selEtapaCalif) selEtapaCalif.addEventListener("change", function(){ calEtapa = selEtapaCalif.value; render(); });
+    document.querySelectorAll("[data-calif-etapa]").forEach(function(inp){
+      function guardarEtapa(){
+        var g2 = grupoActivo(), u2 = g2 && unidadCalifActual(g2);
+        if(!g2 || !u2) return;
+        var b = califBucket(g2.id, u2.id);
+        if(!b.etapas) b.etapas = {};
+        var etp = inp.getAttribute("data-calif-etapa"), eid = inp.getAttribute("data-estudiante");
+        if(!b.etapas[etp]) b.etapas[etp] = {};
+        b.etapas[etp][eid] = inp.value;
+        guardarCalificaciones();
+      }
+      inp.addEventListener("input", guardarEtapa);
+      // Al terminar de escribir se redibuja: el resultado y las etapas siguientes dependen de esta calificación.
+      inp.addEventListener("change", function(){ guardarEtapa(); render(); });
+    });
     document.querySelectorAll("[data-calif-modo]").forEach(function(sel){
       sel.addEventListener("change", function(){
         var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;
