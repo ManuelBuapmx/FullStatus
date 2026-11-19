@@ -3628,7 +3628,8 @@
     var btn = document.createElement("button");
     btn.className = "btn-escuela";
     btn.textContent = escuelaActual.nombre + " ▾";
-    btn.title = "Cambiar de escuela";
+    // PRISMAL MESH: el botón muestra el nombre COMPLETO de la escuela (ya no se corta con «…»; ver .btn-escuela en styles.css).
+    btn.title = escuelaActual.nombre + " — clic para cambiar de escuela";
     btn.addEventListener("click", function(){
       try{ sessionStorage.removeItem(ESCUELA_SESION_KEY); }catch(e){}
       location.reload();
