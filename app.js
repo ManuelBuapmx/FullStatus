@@ -2167,6 +2167,7 @@
   // PRISMAL MESH: etapa que se está viendo en Calificaciones: "ordinario" (la tabla de siempre) o una etapa de
   // regularización ("remedial", "ext1", "ext2", "ext3") que solo existe mientras haya alumnos reprobados que la necesiten.
   var calEtapa = "ordinario";
+  var etapaPubMsg = "", etapaPublicando = false;   // publicación de Remedial/Extraordinarios a los alumnos (publicar_etapas)
   // PRISMAL MESH: calificación del examen que se rellena sola. Lee de Supabase (misma sesión de administrador)
   // los resultados de los exámenes que contestaron los alumnos en FullStatus Student y los pasa a la columna
   // «Exámen» de la unidad, en el modo de captura de esa columna (0-10, % o escala). Los puntos con su
@@ -2661,6 +2662,19 @@
     });
     return {listas: listas, disponibles: disponibles};
   }
+  // Carga para el servidor (RPC publicar_etapas): una etapa de una unidad, con la calificación (o vacío) de cada alumno de su lista.
+  function armarPayloadEtapa(g, unidad, r, et, etapaId){
+    var lista = et.listas[etapaId] || [];
+    var mapa = (r.datos.etapas && r.datos.etapas[etapaId]) || {};
+    return {grupos: [{
+      id: String(g.id), nombre: g.grupoBase || g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[r.modeloId],
+      etapas: [{unidad: unidad.nombre, etapa: etapaId, alumnos: lista.map(function(x){
+        var raw = mapa[x.est.id];
+        var cap = !(raw == null || String(raw).trim() === "");
+        return {nombre: x.est.nombre, calificacion: cap ? String(Math.min(10, numCalif(raw))) : null};
+      })}]
+    }]};
+  }
   function renderEtapaCalif(g, unidad, r, et, etapaId){
     var min = CALIF_MINIMA[r.modeloId];
     var idx = ETAPAS_CALIF.findIndex(function(x){ return x.id === etapaId; });
@@ -2680,7 +2694,11 @@
         + '<td><input type="text" inputmode="decimal" class="calif-input" data-calif-etapa="'+etapaId+'" data-estudiante="'+esc(x.est.id)+'" value="'+esc(capturada ? raw : "")+'"></td>'
         + '<td>'+res+'</td></tr>';
     });
-    h += '</tbody></table></div></div>';
+    h += '</tbody></table></div>';
+    h += '<div class="row" style="margin-top:10px;"><button class="btn" id="btnPublicarEtapa"'+(etapaPublicando ? ' disabled' : '')+'>'+(etapaPublicando ? 'Publicando…' : 'Publicar '+esc(etapa.nombre)+' a los alumnos')+'</button></div>';
+    h += '<p class="helptext" style="margin-top:6px;">Los alumnos que aprobaron ven su calificación de '+esc(etapa.nombre)+' en FullStatus Student; a los que no, se les muestra el siguiente examen con el botón inactivo hasta que lo abras.</p>';
+    if(etapaPubMsg) h += '<p class="helptext" style="white-space:pre-line;">'+esc(etapaPubMsg)+'</p>';
+    h += '</div>';
     return h;
   }
   function renderCalificaciones(){
@@ -2898,6 +2916,34 @@
     if(selUnidadCalif) selUnidadCalif.addEventListener("change", function(){ calUnidad = selUnidadCalif.value; calEtapa = "ordinario"; render(); });
     var selEtapaCalif = document.getElementById("selEtapaCalif");
     if(selEtapaCalif) selEtapaCalif.addEventListener("change", function(){ calEtapa = selEtapaCalif.value; render(); });
+    var btnPubEtapa = document.getElementById("btnPublicarEtapa");
+    if(btnPubEtapa) btnPubEtapa.addEventListener("click", async function(){
+      var g2 = grupoActivo(), u2 = g2 && unidadCalifActual(g2);
+      if(!g2 || !u2 || etapaPublicando || calEtapa === "ordinario") return;
+      var api = window.FullStatusSupabase;
+      if(!api || !api.rpc){ showToast("Falta cargar supabase-asistencias.js."); return; }
+      if(!navigator.onLine){ showToast("Sin conexión: la publicación se hace en línea."); return; }
+      var r2 = calcularCalificaciones(g2, u2), et2 = listasEtapasCalif(r2), etapaId = calEtapa;
+      var nombreEtapa = ETAPAS_CALIF.find(function(x){ return x.id === etapaId; }).nombre;
+      var payload = armarPayloadEtapa(g2, u2, r2, et2, etapaId);
+      etapaPublicando = true; etapaPubMsg = ""; render();
+      try{
+        var res = await api.rpc("publicar_etapas", {p_payload: payload});
+        if(res && res.sinSesion){
+          etapaPubMsg = "Inicia sesión en ☁ Alumnos (administrador) para publicar.";
+        } else {
+          var m = "Listo: " + res.registros + " calificación(es) de " + nombreEtapa + " publicada(s) en " + u2.nombre + " (" + res.aprobados + " aprobaron, " + res.reprobados + " no).";
+          if(res.sin_match && res.sin_match.length) m += "\nSin alumno en Supabase (no se publicaron): " + res.sin_match.join(", ") + ".";
+          if(res.ambiguos && res.ambiguos.length) m += "\nNombre ambiguo (no se publicaron): " + res.ambiguos.join(", ") + ".";
+          if(res.sin_materia && res.sin_materia.length) m += "\nEl grupo no tiene materia: no se pudo publicar.";
+          if(res.materias_creadas && res.materias_creadas.length) m += "\nSe preparó en Supabase: " + res.materias_creadas.join(", ") + ".";
+          etapaPubMsg = m;
+        }
+      }catch(err){
+        etapaPubMsg = "No se pudo publicar: " + (err && err.message || err);
+      }
+      etapaPublicando = false; render();
+    });
     document.querySelectorAll("[data-calif-etapa]").forEach(function(inp){
       function guardarEtapa(){
         var g2 = grupoActivo(), u2 = g2 && unidadCalifActual(g2);
