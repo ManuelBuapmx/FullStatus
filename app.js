@@ -22,6 +22,29 @@
     }
     return lista;
   }
+  // PRISMAL MESH: nombres de escuela guardados en Supabase (tabla escuelas). La lista local solo vive en este equipo y,
+  // si se reinicia, vuelve a «Escuela 1»; así se recupera el nombre real sin iniciar sesión. Función pública de SOLO
+  // LECTURA (nombres_escuelas): devuelve id y nombre, nunca el archivo de Drive. La clave es la pública (anon) de siempre.
+  var SUPABASE_URL_ESCUELAS = "https://juvqvshcfsrtscvzluaa.supabase.co";
+  var SUPABASE_CLAVE_PUBLICA = "sb_publishable_IYf3ISEUGCRGKEM2Bnq1UQ_qFkBHvk5";
+  function traerNombresEscuelas(){
+    return fetch(SUPABASE_URL_ESCUELAS + "/rest/v1/rpc/nombres_escuelas", {
+      method: "POST",
+      headers: {apikey: SUPABASE_CLAVE_PUBLICA, "Content-Type": "application/json"},
+      body: "{}"
+    }).then(function(r){ return r.ok ? r.json() : []; })
+      .then(function(l){ return Array.isArray(l) ? l : []; })
+      .catch(function(){ return []; });
+  }
+  // Solo reemplaza el nombre por defecto («Escuela 1», «Escuela 2»…): un nombre que tú escribiste nunca se pisa.
+  function adoptarNombresEscuelas(lista, remotas){
+    var cambio = false;
+    lista.forEach(function(e){
+      var r = remotas.find(function(x){ return x && x.id === e.id; });
+      if(r && r.nombre && /^\s*Escuela\s*\d*\s*$/i.test(e.nombre) && r.nombre !== e.nombre){ e.nombre = r.nombre; cambio = true; }
+    });
+    return cambio;
+  }
   function sufijoEscuela(e){ return e.original ? "" : "__" + e.id; }
   function extraerIdDrive(texto){
     var t = String(texto || "").trim();
@@ -103,6 +126,9 @@
       });
     }
     pintar();
+    traerNombresEscuelas().then(function(rem){
+      if(adoptarNombresEscuelas(escuelas, rem)){ guardarEscuelas(escuelas); pintar(); }
+    });
   }
 
   var escuelas = cargarEscuelas();
@@ -3635,6 +3661,13 @@
       location.reload();
     });
     conn.insertBefore(btn, conn.firstChild);
+    traerNombresEscuelas().then(function(rem){
+      if(!adoptarNombresEscuelas(escuelas, rem)) return;
+      guardarEscuelas(escuelas);
+      btn.textContent = escuelaActual.nombre + " ▾";
+      btn.title = escuelaActual.nombre + " — clic para cambiar de escuela";
+      document.title = "FullStatus — " + escuelaActual.nombre;
+    });
   })();
   asegurarGoogleIdentity().catch(function(){ /* se reintentará al primer clic */ });
   restaurarCacheLocal().then(function(){
