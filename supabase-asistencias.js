@@ -109,7 +109,11 @@
 
       // Unidades del grupo, en el mismo orden que ve el profesor en FullStatus (por fecha
       // inicial). El servidor numera las unidades según su posición en este arreglo.
-      const unidades = (Array.isArray(g.unidades) ? g.unidades : [])
+      // CAMBIO (19/nov/2026): si el grupo NUNCA tuvo el arreglo "unidades" (grupo recién cargado de Drive) NO se manda la
+      // clave: el servidor solo reemplaza las unidades cuando la clave viene, y así un grupo sin unidades locales ya no
+      // borra las que existan en Supabase. Si el profesor quita todas las unidades, g.unidades queda [] y sí se borran.
+      const tieneUnidades = Array.isArray(g.unidades);
+      const unidades = (tieneUnidades ? g.unidades : [])
         .slice()
         .sort(function (a, b) { return a.desde < b.desde ? -1 : (a.desde > b.desde ? 1 : 0); })
         .map(function (u) {
@@ -118,7 +122,9 @@
 
       // PRISMAL MESH: si el grupo tiene varias materias, "nombre" lleva la materia (nombre de la hoja de Excel);
       // a Supabase se publica el grupo base (grupoBase, p. ej. "7B"), que es el que usa el servidor para desempatar homónimos.
-      return { id: String(g.id), nombre: g.grupoBase || g.nombre || '', materia: g.materia || '', unidades: unidades, alumnos: alumnos };
+      const envio = { id: String(g.id), nombre: g.grupoBase || g.nombre || '', materia: g.materia || '', alumnos: alumnos };
+      if (tieneUnidades) envio.unidades = unidades;
+      return envio;
     });
 
     return { grupos: grupos };

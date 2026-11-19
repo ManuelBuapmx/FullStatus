@@ -1102,6 +1102,7 @@
     html += '<p class="helptext" style="margin-top:0;">Define las unidades de la materia con su rango de fechas. Cada fecha registrada se asigna a la unidad cuyo rango la contiene, y puedes filtrar el historial por unidad. Las unidades solo se guardan en la app; no cambian el Excel institucional.</p>';
     if(unidades.length === 0){
       html += '<p class="empty">Este grupo todavía no tiene unidades.</p>';
+      html += '<p><button class="btn" data-recuperar-nube="1">Recuperar unidades y calificaciones desde la nube</button></p>';
     } else {
       html += '<ul class="estudiantes">';
       unidades.forEach(function(u){
@@ -1702,6 +1703,56 @@
     return workbook;
   }
 
+  // PRISMAL MESH (19/nov/2026): al recargar los grupos desde Drive (Excel o Google Sheets) cada grupo y cada alumno
+  // recibían un id nuevo (uid) y se perdían sus unidades, sus calificaciones capturadas y los justificantes, que
+  // viven en el estado local ligados a esos ids. Además, como Supabase reemplaza todo lo de un id con lo que
+  // publica la app (publicar_asistencias / publicar_calificaciones), el grupo "nuevo" borraba en la nube las
+  // unidades y calificaciones que ya existían. Ahora, si el grupo ya existía (mismo nombre y materia), se
+  // conserva su id, sus unidades y los ids de sus alumnos (por nombre); las asistencias se re-ligan a esos ids.
+  function claveIdentidad(t){
+    return String(t == null ? "" : t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function conservarIdentidadGrupos(grupos, asistencias, previos){
+    previos = Array.isArray(previos) ? previos : [];
+    if(!previos.length) return;
+    var usados = {};
+    grupos.forEach(function(g){
+      var clave = claveIdentidad(g.nombre) + "|" + claveIdentidad(g.materia);
+      var p = previos.find(function(x){ return !usados[x.id] && (claveIdentidad(x.nombre) + "|" + claveIdentidad(x.materia)) === clave; });
+      if(!p){
+        // Respaldo: mismo nombre y un único candidato (por si la materia se escribió distinto o estaba vacía).
+        var porNombre = previos.filter(function(x){ return !usados[x.id] && claveIdentidad(x.nombre) === claveIdentidad(g.nombre); });
+        var nuevosMismoNombre = grupos.filter(function(x){ return claveIdentidad(x.nombre) === claveIdentidad(g.nombre); });
+        if(porNombre.length === 1 && nuevosMismoNombre.length === 1) p = porNombre[0];
+      }
+      if(!p) return;
+      usados[p.id] = true;
+      var idNuevo = g.id, idViejo = p.id;
+      // Ids de alumnos: se reutilizan por nombre (solo si el nombre es único en el grupo anterior).
+      var previosPorNombre = {}, repetidos = {};
+      (p.estudiantes || []).forEach(function(e){
+        var k = claveIdentidad(e.nombre);
+        if(previosPorNombre[k]) repetidos[k] = true; else previosPorNombre[k] = e.id;
+      });
+      var mapaEst = {};
+      (g.estudiantes || []).forEach(function(e){
+        var k = claveIdentidad(e.nombre);
+        if(previosPorNombre[k] && !repetidos[k]){ mapaEst[e.id] = previosPorNombre[k]; e.id = previosPorNombre[k]; }
+      });
+      var porFecha = asistencias[idNuevo] || {};
+      Object.keys(porFecha).forEach(function(fecha){
+        var marcas = porFecha[fecha] || {}, nuevas = {};
+        Object.keys(marcas).forEach(function(estId){ nuevas[mapaEst[estId] || estId] = marcas[estId]; });
+        porFecha[fecha] = nuevas;
+      });
+      delete asistencias[idNuevo];
+      asistencias[idViejo] = porFecha;
+      g.id = idViejo;
+      if(Array.isArray(p.unidades)) g.unidades = p.unidades;
+      if(p.grupoBase && !g.grupoBase) g.grupoBase = p.grupoBase;
+    });
+  }
+
   async function cargarGruposExcelDrive(accessToken){
     var workbook = await descargarWorkbookInstitucional(accessToken);
     var grupos = [], asistencias = {};
@@ -1719,6 +1770,7 @@
       asistencias[grupoId] = datos.asistencias;
     });
     if(!grupos.length) throw new Error("No se encontraron grupos en el archivo institucional");
+    conservarIdentidadGrupos(grupos, asistencias, state.grupos);
     state.grupos = grupos;
     state.asistencias = asistencias;
     state.hojasPorEliminar = [];
@@ -1837,6 +1889,7 @@
       }
     }
     if(!grupos.length) throw new Error("No se encontraron grupos con alumnos");
+    conservarIdentidadGrupos(grupos, asistencias, state.grupos);
     state.grupos = grupos;
     state.asistencias = asistencias;
     state.hojasPorEliminar = [];
@@ -2213,6 +2266,83 @@
     try{ localStorage.setItem(CALIF_KEY, JSON.stringify(califDatos)); }
     catch(e){ showToast("No se pudieron guardar las calificaciones en este equipo."); }
   }
+
+  // PRISMAL MESH (19/nov/2026): recupera desde Supabase las unidades y las calificaciones de un grupo cuyo id cambió
+  // (la nube las guarda por id de grupo y, al recargar desde Drive, el grupo recibía un id nuevo sin unidades).
+  // Es ADITIVO: solo agrega unidades que no se empalman con las locales y solo llena a los alumnos que no tienen ningún
+  // dato capturado en esa unidad; nunca sobrescribe lo que ya está capturado. Las columnas recuperadas se dejan en modo
+  // «Calificación (0-10)», que reproduce exactamente los mismos puntos que ya tenían publicados.
+  async function recuperarDesdeNube(){
+    var g = grupoActivo();
+    if(!g){ showToast("Elige un grupo."); return; }
+    var api = window.FullStatusSupabase;
+    if(!api || !api.rpc){ showToast("Falta cargar supabase-asistencias.js."); return; }
+    showToast("Buscando en la nube…");
+    var r;
+    try{
+      r = await api.rpc("recuperar_datos_grupo", {p_grupo: g.grupoBase || g.nombre || "", p_materia: g.materia || ""});
+    }catch(e){ showToast("No se pudo recuperar: " + (e.message || e)); return; }
+    if(r && r.sinSesion){ showToast("Inicia sesión con el botón ☁ de abajo a la izquierda y vuelve a intentar."); return; }
+    var remotas = (r && Array.isArray(r.unidades)) ? r.unidades : [];
+    var califs = (r && Array.isArray(r.calificaciones)) ? r.calificaciones : [];
+    if(!remotas.length && !califs.length){ showToast("En la nube no hay unidades ni calificaciones de este grupo."); return; }
+
+    var agregadas = 0, llenados = 0;
+    if(!Array.isArray(g.unidades)) g.unidades = [];
+    remotas.forEach(function(u){
+      var nombre = String(u.nombre || "").trim();
+      if(!nombre || !u.desde || !u.hasta) return;
+      var existeNombre = g.unidades.some(function(x){ return claveIdentidad(x.nombre) === claveIdentidad(nombre); });
+      var empalma = g.unidades.some(function(x){ return u.desde <= x.hasta && u.hasta >= x.desde; });
+      if(existeNombre || empalma) return;
+      g.unidades.push({id: uid(), nombre: nombre, desde: u.desde, hasta: u.hasta});
+      agregadas++;
+    });
+
+    var puntos = CALIF_MODELOS[modeloCalifId(g)].puntos;
+    function aEscala10(pts, ptsMaximos){ return ptsMaximos > 0 ? Math.round((Number(pts) / ptsMaximos) * 10 * 10000) / 10000 : 0; }
+    // Alumnos por nombre: primero idéntico (sin acentos ni signos) y, si no, con las palabras en cualquier orden.
+    function claveOrdenada(t){ return claveIdentidad(t).split(" ").sort().join(" "); }
+    var estPorNombre = {}, repetidos = {}, estPorOrden = {}, repetidosOrden = {};
+    g.estudiantes.forEach(function(e){
+      var k = claveIdentidad(e.nombre), ko = claveOrdenada(e.nombre);
+      if(estPorNombre[k]) repetidos[k] = true; else estPorNombre[k] = e;
+      if(estPorOrden[ko]) repetidosOrden[ko] = true; else estPorOrden[ko] = e;
+    });
+    var sinCoincidir = {};
+    califs.forEach(function(c){
+      var unidad = g.unidades.find(function(u){ return claveIdentidad(u.nombre) === claveIdentidad(c.unidad); });
+      var k = claveIdentidad(c.alumno), ko = claveOrdenada(c.alumno);
+      var est = (estPorNombre[k] && !repetidos[k]) ? estPorNombre[k] : ((estPorOrden[ko] && !repetidosOrden[ko]) ? estPorOrden[ko] : null);
+      if(!est){ sinCoincidir[c.alumno] = true; return; }
+      if(!unidad) return;
+      var b = califBucket(g.id, unidad.id);
+      var d = b.alumnos[est.id] || {};
+      var yaTieneDatos = ["examen", "partic", "trab", "extra"].some(function(campo){ return d[campo] != null && String(d[campo]).trim() !== ""; });
+      if(yaTieneDatos) return;
+      if(!b.cols.examen && !b.cols.partic && !b.cols.trab){
+        b.cols = {examen: {modo: "calificacion", max: ""}, partic: {modo: "calificacion", max: ""}, trab: {modo: "calificacion", max: ""}};
+      }
+      if(b.cols.examen.modo !== "calificacion" || b.cols.partic.modo !== "calificacion" || b.cols.trab.modo !== "calificacion") return; // ya hay otra configuración local: no se mezcla
+      var nuevo = {};
+      if(c.pts_examen != null) nuevo.examen = aEscala10(c.pts_examen, puntos.examen);
+      if(c.pts_participaciones != null) nuevo.partic = aEscala10(c.pts_participaciones, puntos.partic);
+      if(c.pts_actividades != null) nuevo.trab = aEscala10(c.pts_actividades, puntos.trab);
+      if(c.pts_extra != null && Number(c.pts_extra) !== 0) nuevo.extra = Number(c.pts_extra);
+      b.alumnos[est.id] = nuevo;
+      llenados++;
+    });
+
+    if(agregadas) saveState(false);
+    if(llenados) guardarCalificaciones();
+    render();
+    var nSin = Object.keys(sinCoincidir).length;
+    showToast("Recuperado: " + agregadas + " unidad(es) y calificaciones de " + llenados + " registro(s)." + (nSin ? " Sin coincidir por nombre: " + nSin + " alumno(s) (" + Object.keys(sinCoincidir).slice(0, 3).join(", ") + (nSin > 3 ? "…" : "") + ")." : ""));
+  }
+  document.addEventListener("click", function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest("[data-recuperar-nube]") : null;
+    if(b) recuperarDesdeNube();
+  });
   function numCalif(v){
     var n = parseFloat(String(v == null ? "" : v).replace(",", "."));
     return isFinite(n) && n >= 0 ? n : 0;
@@ -2740,7 +2870,7 @@
     });
     html += '</select></div></div>';
     if(!unidad){
-      return html + '<p class="empty">Este grupo no tiene unidades. Defínelas en "Historial y exportar" → "Unidades y periodos" para capturar calificaciones.</p></div>';
+      return html + '<p class="empty">Este grupo no tiene unidades. Defínelas en "Historial y exportar" → "Unidades y periodos" para capturar calificaciones.</p><p><button class="btn" data-recuperar-nube="1">Recuperar unidades y calificaciones desde la nube</button></p></div>';
     }
     asegurarMatriculas(g, true);   // la matrícula es lo que relaciona al alumno con su examen
     asegurarExamenesAuto();

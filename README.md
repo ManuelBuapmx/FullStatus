@@ -142,6 +142,14 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-19 (noche) — Falla: al recargar desde Drive se perdían unidades y calificaciones (también en Supabase)
+
+- **Falla:** `cargarGruposExcelDrive` y la carga desde Google Sheets daban un id nuevo (`uid()`) a cada grupo y a cada alumno. Las unidades (`grupo.unidades`), las calificaciones capturadas (`califDatos[grupoId]`) y los justificantes viven en el estado local ligados a esos ids, así que se quedaban huérfanos. Además `publicar_asistencias` y `publicar_calificaciones` reemplazan en Supabase TODO lo de un `origen_grupo` con lo que manda la app: el grupo "nuevo" mandaba `unidades: []` y sin calificaciones, y la nube quedaba sin ellas (los datos viejos quedaban bajo el id anterior, sin que la app los viera).
+- **Ahora:** `conservarIdentidadGrupos` (app.js) reutiliza el id, las unidades y los ids de los alumnos (por nombre) de los grupos que ya existían (mismo nombre y materia) y re-liga las asistencias a esos ids. `supabase-asistencias.js` ya no manda la clave `unidades` si el grupo nunca tuvo ese arreglo (así un grupo sin unidades locales no borra las de Supabase); si el profesor quita todas, `g.unidades` queda `[]` y sí se borran.
+- **Recuperación:** botón «Recuperar unidades y calificaciones desde la nube» (Calificaciones y Historial → Unidades, cuando el grupo no tiene unidades). Llama a la RPC nueva `recuperar_datos_grupo(p_grupo, p_materia)` (solo lectura, solo admin). Es aditivo: no sobrescribe unidades ni alumnos con datos capturados; las columnas recuperadas quedan en modo «Calificación (0-10)» (mismos puntos que ya estaban publicados). Los alumnos se enlazan por nombre.
+- Supabase: migración `recuperar_datos_grupo_rpc`; respaldos `respaldo_20261118_*` y `respaldo_20261119_*` (unidades, calificaciones_unidad, asistencias).
+- Pendiente: las filas con el `origen_grupo` anterior siguen en Supabase (asistencias, unidades, calificaciones duplicadas); limpiar con cuidado cuando todo esté verificado.
+
 ### 2026-11-11 (tarde) — Calificaciones: el examen automático ya no pierde alumnos con el nombre escrito distinto
 
 - **Falla encontrada:** Dimas Juárez (examen 40/40 guardado a las 9:17) y Karla Pérez (26/40) no se capturaron solos. En el examen escribieron su nombre distinto al de la lista (JUAREZ/JUARES, MARTINEZ/MATINEZ). El empate por matrícula depende de la lectura `consultar_matriculas`; si no estaba disponible, `aplicarExamenesAuto` caía a nombre **exacto** y fallaba en silencio (comprobado con los datos reales: el código anterior daba 5 capturados y 4 sin examen, el nuevo 7 y 2).
