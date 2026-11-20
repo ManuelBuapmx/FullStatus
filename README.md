@@ -142,6 +142,14 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-19 (noche, 2) — Total oficial por alumno (documento de la escuela) en Calificaciones
+
+- **Por qué:** la app calcula y publica los totales desde lo capturado en local (`califDatos`) y `publicar_calificaciones` reemplaza lo de la nube; si el documento oficial de la escuela difiere de lo capturado, cualquier corrección hecha solo en Supabase se perdía en la siguiente sincronización.
+- **Qué:** cada alumno de una unidad puede traer `oficial` (total 0-10). Si existe, manda sobre el total calculado (`calcularCalificaciones`), se marca con ● y se publica tal cual: `supabase`/`FullStatusCalifExport` manda `extra = oficial − (asistencias + trabajos + participación + examen)` para que la suma cuadre, y el examen deja de publicarse como «vacío» (la unidad ya está cerrada). Escribir cualquier celda a mano en ese alumno quita su `oficial`.
+- **Botón** «Fijar “Unidad X” con las calificaciones oficiales» (pestaña Calificaciones): llama a la RPC `obtener_calificaciones_oficiales(p_grupo, p_materia)` (solo lectura, solo admin) y fija el total por nombre. No borra lo capturado y se puede repetir.
+- **Supabase:** tabla `calificaciones_oficiales (grupo, materia, unidad, matricula, total, fuente)` con RLS sin políticas (solo se lee por la RPC). Cargadas: 7A Unidad 1 y 2 (30 alumnos, «Evaluaciones.pdf» del 18/11/2026) y 7B Unidad 1 (31 alumnos, «Evaluaciones (1).pdf» del 19/11/2026). 7B ahora tiene también la unidad «Unidad 1» (2026-09-02 a 2026-10-14; fechas inferidas: la «Unidad 2» de 7B empieza el 2026-10-15).
+- Para cargar otro documento oficial: insertar sus filas en `calificaciones_oficiales` y pulsar el botón en esa unidad.
+
 ### 2026-11-19 (noche) — Falla: al recargar desde Drive se perdían unidades y calificaciones (también en Supabase)
 
 - **Falla:** `cargarGruposExcelDrive` y la carga desde Google Sheets daban un id nuevo (`uid()`) a cada grupo y a cada alumno. Las unidades (`grupo.unidades`), las calificaciones capturadas (`califDatos[grupoId]`) y los justificantes viven en el estado local ligados a esos ids, así que se quedaban huérfanos. Además `publicar_asistencias` y `publicar_calificaciones` reemplazan en Supabase TODO lo de un `origen_grupo` con lo que manda la app: el grupo "nuevo" mandaba `unidades: []` y sin calificaciones, y la nube quedaba sin ellas (los datos viejos quedaban bajo el id anterior, sin que la app los viera).

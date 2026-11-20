@@ -2343,6 +2343,52 @@
     var b = ev.target && ev.target.closest ? ev.target.closest("[data-recuperar-nube]") : null;
     if(b) recuperarDesdeNube();
   });
+
+  // PRISMAL MESH (19/nov/2026): fija en la unidad abierta el TOTAL OFICIAL de cada alumno (documento de la escuela,
+  // guardado en public.calificaciones_oficiales). No toca lo capturado: solo agrega "oficial" al alumno. Se puede repetir.
+  async function fijarOficialDesdeNube(){
+    var g = grupoActivo(); var u = g && unidadCalifActual(g);
+    if(!u){ showToast("Elige un grupo con una unidad."); return; }
+    var api = window.FullStatusSupabase;
+    if(!api || !api.rpc){ showToast("Falta cargar supabase-asistencias.js."); return; }
+    showToast("Consultando la nube…");
+    var r;
+    try{
+      r = await api.rpc("obtener_calificaciones_oficiales", {p_grupo: g.grupoBase || g.nombre || "", p_materia: g.materia || ""});
+    }catch(e){ showToast("No se pudo consultar: " + (e.message || e)); return; }
+    if(r && r.sinSesion){ showToast("Inicia sesión con el botón ☁ de abajo a la izquierda y vuelve a intentar."); return; }
+    var oficiales = (Array.isArray(r) ? r : []).filter(function(x){ return claveIdentidad(x.unidad) === claveIdentidad(u.nombre); });
+    if(!oficiales.length){ showToast("En la nube no hay calificaciones oficiales de «" + u.nombre + "» para este grupo."); return; }
+    function claveOrdenada(t){ return claveIdentidad(t).split(" ").sort().join(" "); }
+    var porNombre = {}, repN = {}, porOrden = {}, repO = {};
+    g.estudiantes.forEach(function(e){
+      var k = claveIdentidad(e.nombre), ko = claveOrdenada(e.nombre);
+      if(porNombre[k]) repN[k] = true; else porNombre[k] = e;
+      if(porOrden[ko]) repO[ko] = true; else porOrden[ko] = e;
+    });
+    var asignar = [], sinCoincidir = [];
+    oficiales.forEach(function(o){
+      var k = claveIdentidad(o.alumno), ko = claveOrdenada(o.alumno);
+      var est = (porNombre[k] && !repN[k]) ? porNombre[k] : ((porOrden[ko] && !repO[ko]) ? porOrden[ko] : null);
+      if(est) asignar.push({est: est, total: Number(o.total)}); else sinCoincidir.push(o.alumno || o.matricula);
+    });
+    if(!asignar.length){ showToast("Ningún alumno del grupo coincide por nombre con la nube."); return; }
+    confirmar("Fijar «" + u.nombre + "» con las calificaciones oficiales de la nube para " + asignar.length + " alumno(s)? No se borra lo capturado; el total oficial manda y se publica."
+      + (sinCoincidir.length ? " Sin coincidir por nombre: " + sinCoincidir.slice(0, 4).join(", ") + (sinCoincidir.length > 4 ? "…" : "") + "." : ""), function(){
+      var datos = califBucket(g.id, u.id);
+      asignar.forEach(function(a){
+        if(!datos.alumnos[a.est.id]) datos.alumnos[a.est.id] = {};
+        datos.alumnos[a.est.id].oficial = a.total;
+      });
+      guardarCalificaciones();
+      render();
+      showToast("Listo: " + asignar.length + " calificación(es) oficial(es) fijadas en «" + u.nombre + "».");
+    });
+  }
+  document.addEventListener("click", function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest("[data-oficial-nube]") : null;
+    if(b) fijarOficialDesdeNube();
+  });
   function numCalif(v){
     var n = parseFloat(String(v == null ? "" : v).replace(",", "."));
     return isFinite(n) && n >= 0 ? n : 0;
@@ -2431,7 +2477,11 @@
       });
       var ptsAsist = dias ? Math.min(asist / dias, 1) * puntos.asist : 0;
       var total = Math.max(0, Math.min(10, pts.trab + pts.partic + pts.examen + ptsAsist + numExtra(d.extra)));
-      return {estudiante:e, asist:asist, total:Math.round(total * 100) / 100, pts:{asist:ptsAsist, trab:pts.trab, partic:pts.partic, examen:pts.examen}};
+      // Total OFICIAL (documento de la escuela): si el alumno lo trae, manda sobre lo calculado. Se fija con el botón
+      // «Fijar esta unidad con las calificaciones oficiales» y se quita solo si el profesor escribe algo a mano en esa fila.
+      var tieneOficial = !(d.oficial == null || String(d.oficial).trim() === "");
+      if(tieneOficial) total = Math.max(0, Math.min(10, numCalif(d.oficial)));
+      return {estudiante:e, asist:asist, total:Math.round(total * 100) / 100, oficial:tieneOficial, pts:{asist:ptsAsist, trab:pts.trab, partic:pts.partic, examen:pts.examen}};
     });
     return {unidad:unidad, modeloId:modeloId, modelo:modelo, puntos:puntos, datos:datos, dias:dias, cfg:cfg, escala:escala, cuenta:cuenta, filas:filas};
   }
@@ -2466,8 +2516,8 @@
           alumnos[i].unidades.push({
             nombre: u.nombre || "",
             asistencias: r2(f.pts.asist), actividades: r2(f.pts.trab), participaciones: r2(f.pts.partic),
-            examen: vacio(d.examen) ? null : r2(f.pts.examen),
-            extra: r2(numExtra(d.extra)),
+            examen: (vacio(d.examen) && !f.oficial) ? null : r2(f.pts.examen),
+            extra: f.oficial ? r2(f.total - (f.pts.asist + f.pts.trab + f.pts.partic + f.pts.examen)) : r2(numExtra(d.extra)),
             n_actividades: enEscala("trab") ? r2(valorColumna("trab", "escala", d.trab)) : null,
             total_actividades: enEscala("trab") ? r2(r.escala.trab.efectiva) : null,
             n_participaciones: enEscala("partic") ? r2(valorColumna("partic", "escala", d.partic)) : null
@@ -2719,7 +2769,7 @@
     var r = calcularCalificaciones(g, u);
     r.filas.forEach(function(f){
       var celda = document.querySelector('[data-calif-total="' + f.estudiante.id + '"]');
-      if(celda) celda.innerHTML = "<b>" + f.total + "</b>";
+      if(celda){ celda.innerHTML = "<b>" + f.total + "</b>" + (f.oficial ? "<sup>●</sup>" : ""); if(f.oficial) celda.title = "Total oficial de la escuela"; else celda.removeAttribute("title"); }
     });
     var resumen = {califResAsist:r.dias, califResPartic:r.cuenta.partic, califResTrab:r.cuenta.trab};
     Object.keys(resumen).forEach(function(id){
@@ -2944,6 +2994,8 @@
     if(pegarPartMsg) html += '<p class="helptext" style="margin-top:8px;white-space:pre-line;">'+esc(pegarPartMsg)+'</p>';
     html += '</details></div>';
 
+    html += '<div class="card compacta"><div class="row"><button class="btn" data-oficial-nube="1">Fijar «'+esc(unidad.nombre)+'» con las calificaciones oficiales</button></div>'
+      + '<p class="helptext">Toma de la nube las calificaciones oficiales de esta unidad (las del documento de la escuela) y deja ese total en cada alumno. Se marca con ● y es lo que se publica. Si escribes algo a mano en un alumno, ese alumno vuelve a calcularse solo.</p></div>';
     html += '<div class="card compacta">';
     if(g.estudiantes.length === 0){
       return html + '<p class="empty">Este grupo no tiene estudiantes todavía.</p></div>';
@@ -2970,7 +3022,7 @@
         html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" class="calif-input'+(ia ? ' calif-auto' : '')+'"'
           + (ia ? ' title="'+esc('Automático: '+ia.correctas+' / '+ia.total+' en «'+ia.nombre+'»'+(ia.tipo ? ' ('+ia.tipo+')' : '')+'. Si lo escribes a mano ya no se cambia solo.')+'"' : '')+'></td>';
       });
-      html += '<td data-calif-total="'+esc(e.id)+'"><b>'+f.total+'</b></td></tr>';
+      html += '<td data-calif-total="'+esc(e.id)+'"'+(f.oficial ? ' title="Total oficial de la escuela"' : '')+'><b>'+f.total+'</b>'+(f.oficial ? '<sup>●</sup>' : '')+'</td></tr>';
     });
     html += '</tbody></table></div></div>';
     return html;
@@ -3139,6 +3191,7 @@
         var datos = califBucket(g.id, u.id), id = inp.getAttribute("data-estudiante");
         if(!datos.alumnos[id]) datos.alumnos[id] = {};
         datos.alumnos[id][inp.getAttribute("data-calif")] = inp.value;
+        delete datos.alumnos[id].oficial; // lo escrito a mano manda: ese alumno vuelve a calcularse solo
         // Lo escrito a mano manda: esa celda deja de ser automática y el examen ya no la pisa.
         if(inp.getAttribute("data-calif") === "examen" && datos.autoExamen){ delete datos.autoExamen[id]; inp.classList.remove("calif-auto"); inp.removeAttribute("title"); }
         guardarCalificaciones(); refrescarTotalesCalif();
