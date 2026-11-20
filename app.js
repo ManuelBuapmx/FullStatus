@@ -2924,7 +2924,10 @@
     var min = CALIF_MINIMA[r.modeloId];
     var actual = r.filas.filter(function(f){
       var d = r.datos.alumnos[f.estudiante.id] || {};
-      return !(d.examen == null || String(d.examen).trim() === "") && f.total < min;
+      // CAMBIO (20/nov/2026): una calificación OFICIAL de la escuela (●) cuenta como ordinario ya cerrado aunque no haya examen
+      // capturado en la app; antes esos alumnos reprobados (p. ej. con 6) nunca entraban a la lista de Remedial.
+      var ordinarioCerrado = f.oficial || !(d.examen == null || String(d.examen).trim() === "");
+      return ordinarioCerrado && f.total < min;
     }).map(function(f){ return {est: f.estudiante, previa: f.total}; });
     var listas = {}, disponibles = [];
     ETAPAS_CALIF.forEach(function(et){

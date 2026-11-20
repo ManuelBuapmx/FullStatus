@@ -142,6 +142,11 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 (2) — Remedial automático para alumnos con calificación oficial
+
+- **Falla:** `listasEtapasCalif` solo metía a la lista de Remedial a quien tuviera el examen ordinario capturado en la app. Con calificaciones oficiales (●) no hay examen capturado, así que alumnos reprobados (p. ej. 1C con 6.0, mínimo 7 del modelo nuevo) nunca aparecían.
+- **Ahora:** un total oficial cuenta como ordinario cerrado; si es menor al mínimo del modelo (7 nuevo, 8 anterior) el alumno entra solo a la lista de Remedial (y de ahí a Extraordinarios si siguen reprobando). La etapa «Remedial» aparece sola en el selector de Calificaciones. Publicar la etapa a los alumnos (`publicar_etapas`) sigue siendo con el botón.
+
 ### 2026-11-20 — Calificaciones oficiales automáticas (sin botón)
 
 - `aplicarOficialesAutomatico` (app.js) aplica solas las calificaciones oficiales de `calificaciones_oficiales` a TODOS los grupos: al abrir la app (4 s después de cargar), al entrar a la pestaña Calificaciones, al volver el internet y cada 5 min (con un mínimo de 60 s entre corridas). Si a un grupo le falta localmente una unidad que tiene oficiales, la trae de la nube (solo agrega: no empalma con otra ni sobrescribe). Sin sesión o sin internet no hace nada y reintenta.
