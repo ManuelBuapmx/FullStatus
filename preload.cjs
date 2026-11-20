@@ -13,3 +13,11 @@ contextBridge.exposeInMainWorld("fullstatusSecretos", {
   leer: (clave) => ipcRenderer.invoke("fullstatus:secreto-leer", clave),
   borrar: (clave) => ipcRenderer.invoke("fullstatus:secreto-borrar", clave)
 });
+
+// Actualizar la app desde GitHub desde la propia interfaz (ver actualizador.js).
+contextBridge.exposeInMainWorld("fullstatusActualizar", {
+  revisar: () => ipcRenderer.invoke("fullstatus:actualizar-revisar"),
+  aplicar: () => ipcRenderer.invoke("fullstatus:actualizar-aplicar"),
+  recargar: () => ipcRenderer.invoke("fullstatus:recargar"),
+  reiniciar: () => ipcRenderer.invoke("fullstatus:reiniciar")
+});

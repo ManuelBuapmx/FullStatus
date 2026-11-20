@@ -1,5 +1,6 @@
 const { app, BrowserWindow, shell, Menu, ipcMain, dialog, safeStorage } = require("electron");
 const http = require("http");
+const { execFile } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -77,6 +78,53 @@ ipcMain.handle("fullstatus:secreto-leer", (event, clave) => {
 ipcMain.handle("fullstatus:secreto-borrar", (event, clave) => {
   if (!origenPermitido(event) || typeof clave !== "string") return false;
   try { const s = leerSecretos(); delete s[clave]; return escribirSecretos(s); } catch (e) { return false; }
+});
+
+// Actualizar la app desde GitHub sin abrir la terminal: git fetch / git pull --ff-only en la carpeta del proyecto.
+// Solo funciona si la app corre desde el repositorio (npm run start:windows). Si cambian archivos del proceso principal
+// (electron-main.cjs, preload.cjs, package.json) la app se reinicia sola; si no, solo se recarga la ventana.
+function git(args) {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd: ROOT, timeout: 90000, windowsHide: true }, (err, stdout, stderr) => {
+      resolve({ ok: !err, out: String(stdout || "").trim(), err: String(stderr || (err && err.message) || "").trim() });
+    });
+  });
+}
+ipcMain.handle("fullstatus:actualizar-revisar", async (event) => {
+  if (!origenPermitido(event)) return { ok: false, error: "Origen no permitido." };
+  if (!fs.existsSync(path.join(ROOT, ".git"))) return { ok: false, sinGit: true, error: "Esta instalación no está conectada a GitHub (no hay carpeta .git)." };
+  const f = await git(["fetch", "--quiet", "origin", "main"]);
+  if (!f.ok) return { ok: false, error: "No se pudo consultar GitHub: " + f.err };
+  const c = await git(["rev-list", "--count", "HEAD..origin/main"]);
+  const n = parseInt(c.out, 10) || 0;
+  const l = n ? await git(["log", "--format=%s", "-n", "5", "HEAD..origin/main"]) : { out: "" };
+  return { ok: true, pendientes: n, resumen: l.out ? l.out.split("\n") : [] };
+});
+ipcMain.handle("fullstatus:actualizar-aplicar", async (event) => {
+  if (!origenPermitido(event)) return { ok: false, error: "Origen no permitido." };
+  if (!fs.existsSync(path.join(ROOT, ".git"))) return { ok: false, error: "Esta instalación no está conectada a GitHub (no hay carpeta .git)." };
+  const sucio = await git(["status", "--porcelain", "--untracked-files=no"]);
+  if (sucio.out) return { ok: false, error: "Hay cambios locales sin guardar en la carpeta del proyecto; no se actualiza para no perderlos:\n" + sucio.out.split("\n").slice(0, 6).join("\n") };
+  const antes = await git(["rev-parse", "HEAD"]);
+  const p = await git(["pull", "--ff-only", "--quiet", "origin", "main"]);
+  if (!p.ok) return { ok: false, error: "No se pudo actualizar: " + p.err };
+  const despues = await git(["rev-parse", "HEAD"]);
+  if (antes.out === despues.out) return { ok: true, igual: true, archivos: [], reinicio: false };
+  const dif = await git(["diff", "--name-only", antes.out, despues.out]);
+  const archivos = dif.out ? dif.out.split("\n") : [];
+  const reinicio = archivos.some((f) => /^(electron-main\.cjs|preload\.cjs|package\.json|package-lock\.json)$/.test(f));
+  const dependencias = archivos.some((f) => /^package(-lock)?\.json$/.test(f));
+  return { ok: true, igual: false, archivos: archivos, reinicio: reinicio, dependencias: dependencias };
+});
+ipcMain.handle("fullstatus:recargar", (event) => {
+  if (!origenPermitido(event)) return false;
+  event.sender.reloadIgnoringCache();
+  return true;
+});
+ipcMain.handle("fullstatus:reiniciar", (event) => {
+  if (!origenPermitido(event)) return false;
+  setTimeout(() => { app.relaunch(); app.exit(0); }, 300);
+  return true;
 });
 
 // Genera un PDF a partir del HTML que arma la interfaz (pestaña Calificaciones):

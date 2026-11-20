@@ -142,6 +142,14 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 (3) — Botón «⟳ Actualizar» dentro de la app (sin terminal)
+
+- **Archivos:** `actualizador.js` (interfaz, cargado desde `index.html`), IPC en `electron-main.cjs` (`fullstatus:actualizar-revisar` / `-aplicar` / `recargar` / `reiniciar`) y `preload.cjs` (`window.fullstatusActualizar`). `actualizador.js` también está en `build.files` de `package.json`.
+- **Cómo funciona:** al abrir (8 s) y cada 10 min hace `git fetch` (no cambia nada) y, si hay commits nuevos en `origin/main`, el botón «⟳ Actualizar» (abajo a la derecha) muestra un punto rojo. Al pulsarlo: `git pull --ff-only`; si solo cambiaron archivos de la interfaz recarga la ventana (`reloadIgnoringCache`); si cambió `electron-main.cjs`, `preload.cjs` o `package.json`/`package-lock.json` reinicia la app sola (`app.relaunch`). Si cambió `package.json` avisa por si hace falta `npm install`.
+- **Seguridad:** no actualiza si hay cambios locales sin guardar en la carpeta del proyecto (`git status`), solo acepta `--ff-only`, y los IPC solo responden desde `http://localhost:5173`. En web/Android o en el instalador (sin carpeta `.git`) el botón no aparece.
+- **Primera vez:** esta versión hay que traerla con `git pull` y reiniciar a mano; desde ahí las siguientes se actualizan con el botón.
+- No se actualiza sola a propósito: lo que está en GitHub se ejecuta en esta PC; el botón deja decidir cuándo.
+
 ### 2026-11-20 (2) — Remedial automático para alumnos con calificación oficial
 
 - **Falla:** `listasEtapasCalif` solo metía a la lista de Remedial a quien tuviera el examen ordinario capturado en la app. Con calificaciones oficiales (●) no hay examen capturado, así que alumnos reprobados (p. ej. 1C con 6.0, mínimo 7 del modelo nuevo) nunca aparecían.

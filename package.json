@@ -27,6 +27,7 @@
       "supabase-asistencias.js",
       "supabase-calificaciones.js",
       "supabase-examenes.js",
+      "actualizador.js",
       "FullStatus.png",
       "FS.png",
       "package.json",
