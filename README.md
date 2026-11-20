@@ -142,6 +142,15 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 — Remediales y extraordinarios OFICIALES: se aplican solos desde la nube
+
+- **Pedido:** capturar la «Acción Remedial 1» (PDF de la escuela del 20/11/2026) de 4C, Ética Profesional, Unidad 1: los 5 alumnos que reprobaron la unidad (5, 5, 5, 4 y 4) sacaron 7, 7, 7, 6 y 7 (promedio 6.80, 1 reprobado: Ortiz con 6).
+- **Supabase:** tabla nueva `calificaciones_etapas_oficiales` (grupo, materia, unidad, etapa `remedial|ext1|ext2|ext3`, matrícula, total 0-10; RLS activo y sin acceso directo) y RPC `obtener_etapas_oficiales(p_grupo, p_materia)` (solo admin, mismo patrón que `obtener_calificaciones_oficiales`). Ya tiene las 5 filas del remedial de 4C Unidad 1.
+- **`app.js` (`aplicarOficialesAutomatico`):** además de los totales oficiales de la unidad, pide `obtener_etapas_oficiales` y guarda cada calificación en `califDatos[grupo][unidad].etapas[etapa][alumno]` (la tabla de Remedial/Extraordinario de la pestaña Calificaciones). **Solo llena celdas vacías:** lo capturado a mano manda. Si la función no existe o falla, se omite sin afectar a los totales de la unidad. Si la unidad falta en local, se trae de la nube como antes.
+- **No publica a los alumnos:** el botón «Publicar Remedial a los alumnos» sigue siendo manual.
+- **Para oficializar otro remedial/extraordinario:** basta insertar filas en `calificaciones_etapas_oficiales`; la app las toma sola (al abrir, al entrar a Calificaciones, cada 5 min).
+- **Probado solo con `node`** (nube simulada): llena los 5, no pisa lo capturado a mano, tolera que la función falle y funciona con la unidad faltante. No se probó en Electron.
+
 ### 2026-11-20 (6) — 05:29 UTC (19/11 11:29 p. m., hora de México) — Calificaciones: «Cómo capturas cada columna» va plegado
 
 - **Cambio de usabilidad (`app.js`):** el cuadro con los modos de captura de Exámen, Partic. y Trabajos ocupaba media pantalla arriba de la tabla aunque casi nunca se cambia. Ahora es un `<details>` cerrado que muestra en una línea el modo vigente de cada columna (`resumenModosCalif`, p. ej. «Exámen: 0-10 · Partic.: escala (máx. automático) · Trabajos en clase: escala (máx. 13)») y se despliega con «Cambiar». Si se despliega, queda abierto al redibujar (`modosCalifAbierto`). Los selectores y sus manejadores son los mismos: no cambia ningún cálculo ni dato.

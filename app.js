@@ -2350,10 +2350,20 @@
         }
         var of = await api.rpc("obtener_calificaciones_oficiales", args);
         if(of && of.sinSesion) return;
-        if(!Array.isArray(of) || !of.length) continue;
+        if(!Array.isArray(of)) of = [];
+        // PRISMAL MESH (20/nov/2026): remediales y extraordinarios OFICIALES (RPC obtener_etapas_oficiales). Si la función no
+        // existe o falla, solo se omiten: no afectan a los totales oficiales de la unidad.
+        var oe = [];
+        try{
+          var rOe = await api.rpc("obtener_etapas_oficiales", args);
+          if(rOe && rOe.sinSesion) return;
+          oe = Array.isArray(rOe) ? rOe : [];
+        }catch(eOe){ if(eOe instanceof TypeError) throw eOe; oe = []; }
+        if(!of.length && !oe.length) continue;
         if(!Array.isArray(g.unidades)) g.unidades = [];
         var nombresOf = {};
         of.forEach(function(o){ nombresOf[claveIdentidad(o.unidad)] = true; });
+        oe.forEach(function(o){ nombresOf[claveIdentidad(o.unidad)] = true; });
         var faltan = Object.keys(nombresOf).filter(function(k){
           return !g.unidades.some(function(u){ return claveIdentidad(u.nombre) === k; });
         });
@@ -2385,6 +2395,23 @@
           if(d.oficialQuitado) return;
           if(d.oficial != null && Number(d.oficial) === Number(o.total)) return;
           d.oficial = Number(o.total);
+          cambioCalif = true;
+        });
+        // Remedial / Extraordinarios oficiales: se guardan en la unidad (datos.etapas[etapa][alumno]) y SOLO llenan celdas vacías.
+        oe.forEach(function(o){
+          var etapaId = String(o.etapa || "");
+          if(ETAPAS_CALIF.every(function(x){ return x.id !== etapaId; })) return;
+          var unidad = g.unidades.find(function(u){ return claveIdentidad(u.nombre) === claveIdentidad(o.unidad); });
+          if(!unidad) return;
+          var k = claveIdentidad(o.alumno), ko = claveOrd(o.alumno);
+          var est = (porNombre[k] && !repN[k]) ? porNombre[k] : ((porOrden[ko] && !repO[ko]) ? porOrden[ko] : null);
+          if(!est) return;
+          var datosE = califBucket(g.id, unidad.id);
+          if(!datosE.etapas) datosE.etapas = {};
+          if(!datosE.etapas[etapaId]) datosE.etapas[etapaId] = {};
+          var actualE = datosE.etapas[etapaId][est.id];
+          if(actualE != null && String(actualE).trim() !== "") return;
+          datosE.etapas[etapaId][est.id] = String(Number(o.total));
           cambioCalif = true;
         });
       }
