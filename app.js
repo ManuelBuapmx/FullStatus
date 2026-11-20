@@ -2270,19 +2270,82 @@
   // al abrir la app, al entrar a Calificaciones, al volver el internet y cada 5 minutos. Si falta localmente una unidad que
   // tiene calificaciones oficiales, la trae de la nube (solo agrega: no empalma ni sobrescribe). Respeta a los alumnos en los
   // que el profesor escribió algo a mano (oficialQuitado). Sin sesión no hace nada. Es el ÚNICO mecanismo: ya no hay botones.
-  var autoOficialEnCurso = false, autoOficialUltimo = 0, autoOficialAvisoError = false;
+  // PRISMAL MESH (20/nov/2026): si un grupo se quedó SIN unidades (p. ej. se recargó desde Drive y recibió un id nuevo), se
+  // reponen solas desde la nube las unidades y las calificaciones que ya tenía publicadas (RPC recuperar_datos_grupo), AUNQUE
+  // el grupo no tenga calificaciones oficiales. Es ADITIVO: solo agrega unidades que no se empalman y solo llena a los alumnos
+  // sin ningún dato capturado en esa unidad; nunca sobrescribe. Las columnas recuperadas quedan en modo «Calificación (0-10)»,
+  // que reproduce los mismos puntos que ya estaban publicados. Devuelve cuántas unidades y alumnos se repusieron.
+  function restaurarGrupoDesdeNube(g, rec){
+    var res = {unidades: 0, llenados: 0};
+    var remotas = (rec && Array.isArray(rec.unidades)) ? rec.unidades : [];
+    var califs = (rec && Array.isArray(rec.calificaciones)) ? rec.calificaciones : [];
+    if(!Array.isArray(g.unidades)) g.unidades = [];
+    remotas.forEach(function(u){
+      var nombre = String(u.nombre || "").trim();
+      if(!nombre || !u.desde || !u.hasta) return;
+      var existeNombre = g.unidades.some(function(x){ return claveIdentidad(x.nombre) === claveIdentidad(nombre); });
+      var empalma = g.unidades.some(function(x){ return u.desde <= x.hasta && u.hasta >= x.desde; });
+      if(existeNombre || empalma) return;
+      g.unidades.push({id: uid(), nombre: nombre, desde: u.desde, hasta: u.hasta});
+      res.unidades++;
+    });
+    var puntos = CALIF_MODELOS[modeloCalifId(g)].puntos;
+    function aEscala10(pts, max){ return max > 0 ? Math.round((Number(pts) / max) * 10 * 10000) / 10000 : 0; }
+    function claveOrdenada(t){ return claveIdentidad(t).split(" ").sort().join(" "); }
+    var estPorNombre = {}, rep1 = {}, estPorOrden = {}, rep2 = {};
+    g.estudiantes.forEach(function(e){
+      var k = claveIdentidad(e.nombre), ko = claveOrdenada(e.nombre);
+      if(estPorNombre[k]) rep1[k] = true; else estPorNombre[k] = e;
+      if(estPorOrden[ko]) rep2[ko] = true; else estPorOrden[ko] = e;
+    });
+    califs.forEach(function(c){
+      var unidad = g.unidades.find(function(u){ return claveIdentidad(u.nombre) === claveIdentidad(c.unidad); });
+      if(!unidad) return;
+      var k = claveIdentidad(c.alumno), ko = claveOrdenada(c.alumno);
+      var est = (estPorNombre[k] && !rep1[k]) ? estPorNombre[k] : ((estPorOrden[ko] && !rep2[ko]) ? estPorOrden[ko] : null);
+      if(!est) return;
+      var b = califBucket(g.id, unidad.id);
+      var d = b.alumnos[est.id] || {};
+      var yaTiene = ["examen", "partic", "trab", "extra"].some(function(campo){ return d[campo] != null && String(d[campo]).trim() !== ""; });
+      if(yaTiene) return;
+      if(!b.cols.examen && !b.cols.partic && !b.cols.trab){
+        b.cols = {examen: {modo: "calificacion", max: ""}, partic: {modo: "calificacion", max: ""}, trab: {modo: "calificacion", max: ""}};
+      }
+      if(b.cols.examen.modo !== "calificacion" || b.cols.partic.modo !== "calificacion" || b.cols.trab.modo !== "calificacion") return;
+      var nuevo = {};
+      if(c.pts_examen != null) nuevo.examen = aEscala10(c.pts_examen, puntos.examen);
+      if(c.pts_participaciones != null) nuevo.partic = aEscala10(c.pts_participaciones, puntos.partic);
+      if(c.pts_actividades != null) nuevo.trab = aEscala10(c.pts_actividades, puntos.trab);
+      if(c.pts_extra != null && Number(c.pts_extra) !== 0) nuevo.extra = Number(c.pts_extra);
+      b.alumnos[est.id] = nuevo;
+      res.llenados++;
+    });
+    return res;
+  }
+  var autoOficialEnCurso = false, autoOficialUltimo = 0, autoOficialAvisoError = false, autoRecupIntentado = {};
   async function aplicarOficialesAutomatico(forzar){
     if(autoOficialEnCurso) return;
     if(!forzar && Date.now() - autoOficialUltimo < 60000) return;
     var api = window.FullStatusSupabase;
     if(!api || !api.rpc || !state.grupos.length) return;
     autoOficialEnCurso = true;
-    var cambioUnidades = false, cambioCalif = false;
+    var cambioUnidades = false, cambioCalif = false, recuperados = [];
     function claveOrd(t){ return claveIdentidad(t).split(" ").sort().join(" "); }
     try{
       for(var gi = 0; gi < state.grupos.length; gi++){
         var g = state.grupos[gi];
         var args = {p_grupo: g.grupoBase || g.nombre || "", p_materia: g.materia || ""};
+        // Grupo sin unidades: se intenta reponerlo desde la nube (una vez por sesión, o al forzar).
+        if((!Array.isArray(g.unidades) || !g.unidades.length) && (forzar || !autoRecupIntentado[g.id])){
+          var rec0 = await api.rpc("recuperar_datos_grupo", args);
+          if(rec0 && rec0.sinSesion) return;
+          autoRecupIntentado[g.id] = true;
+          var rr = restaurarGrupoDesdeNube(g, rec0);
+          if(rr.unidades || rr.llenados){
+            cambioUnidades = cambioUnidades || rr.unidades > 0; cambioCalif = cambioCalif || rr.llenados > 0;
+            recuperados.push((g.nombre || args.p_grupo) + " (" + rr.unidades + " unidad(es))");
+          }
+        }
         var of = await api.rpc("obtener_calificaciones_oficiales", args);
         if(of && of.sinSesion) return;
         if(!Array.isArray(of) || !of.length) continue;
@@ -2333,7 +2396,10 @@
     finally{ autoOficialEnCurso = false; autoOficialUltimo = Date.now(); }
     if(cambioUnidades) saveState(false);
     if(cambioCalif) guardarCalificaciones();
-    if(cambioUnidades || cambioCalif){ render(); showToast("Calificaciones oficiales aplicadas."); }
+    if(cambioUnidades || cambioCalif){
+      render();
+      showToast(recuperados.length ? "Se recuperaron desde la nube las unidades y calificaciones de: " + recuperados.join(", ") + "." : "Calificaciones oficiales aplicadas.");
+    }
   }
   window.addEventListener("online", function(){ setTimeout(function(){ aplicarOficialesAutomatico(true); }, 2000); });
   setInterval(function(){ aplicarOficialesAutomatico(false); }, 300000);
