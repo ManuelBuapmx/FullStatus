@@ -2994,7 +2994,7 @@
     if(pegarPartMsg) html += '<p class="helptext" style="margin-top:8px;white-space:pre-line;">'+esc(pegarPartMsg)+'</p>';
     html += '</details></div>';
 
-    html += '<div class="card compacta"><div class="row"><button class="btn" data-oficial-nube="1">Fijar «'+esc(unidad.nombre)+'» con las calificaciones oficiales</button></div>'
+    html += '<div class="card compacta"><div class="row"><button class="btn" data-oficial-nube="1">Fijar «'+esc(unidad.nombre)+'» con las calificaciones oficiales</button> <button class="btn secondary" data-recuperar-nube="1">Traer unidades que falten desde la nube</button></div>'
       + '<p class="helptext">Toma de la nube las calificaciones oficiales de esta unidad (las del documento de la escuela) y deja ese total en cada alumno. Se marca con ● y es lo que se publica. Si escribes algo a mano en un alumno, ese alumno vuelve a calcularse solo.</p></div>';
     html += '<div class="card compacta">';
     if(g.estudiantes.length === 0){
