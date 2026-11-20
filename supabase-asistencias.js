@@ -145,7 +145,10 @@
     const datos = await resp.json().catch(function () { return {}; });
     if (!resp.ok) {
       const err = new Error(datos.error_description || datos.msg || datos.message || 'No se pudo iniciar sesión');
-      err.rechazado = true;
+      // CAMBIO (19/nov/2026): antes CUALQUIER error del servidor (429, 500, 503...) contaba como "sesión inválida" y borraba
+      // la sesión guardada, y había que iniciar sesión otra vez. Ahora solo 400/401/403/422 significan token o contraseña
+      // inválidos; lo demás es transitorio (se reintenta luego y la sesión guardada se conserva).
+      err.rechazado = (resp.status === 400 || resp.status === 401 || resp.status === 403 || resp.status === 422);
       throw err;
     }
     sesion = {
@@ -156,16 +159,38 @@
     };
     // Supabase rota el refresh_token en cada renovación: se guarda el nuevo.
     // Se guarda solo el token de renovación, nunca la contraseña.
-    localStorage.setItem(CLAVE_AUTH, JSON.stringify({ refresh_token: sesion.refresh_token }));
+    // También se guarda el access_token vigente: al abrir la app no hace falta renovar (menos rotaciones del refresh_token).
+    localStorage.setItem(CLAVE_AUTH, JSON.stringify({ refresh_token: sesion.refresh_token, access_token: sesion.access_token, expira: sesion.expira }));
+  }
+
+  // --- Sesión que se mantiene sola en este equipo (solo Electron) -----------------------------------------------------
+  // El correo y la contraseña se guardan CIFRADOS por el sistema (DPAPI en Windows) a través de window.fullstatusSecretos.
+  // Si el token de renovación deja de servir, la app vuelve a entrar sola. Solo "Cerrar sesión" (manual) los borra.
+  const CLAVE_CRED = 'supabase_login';
+  async function guardarCredenciales(correo, contrasena) {
+    try { if (window.fullstatusSecretos) await window.fullstatusSecretos.guardar(CLAVE_CRED, JSON.stringify({ correo: correo, contrasena: contrasena })); } catch (e) { /* sin almacén seguro: queda solo el token */ }
+  }
+  async function leerCredenciales() {
+    try {
+      if (!window.fullstatusSecretos) return null;
+      const v = await window.fullstatusSecretos.leer(CLAVE_CRED);
+      const c = v ? JSON.parse(v) : null;
+      return (c && c.correo && c.contrasena) ? c : null;
+    } catch (e) { return null; }
+  }
+  async function borrarCredenciales() {
+    try { if (window.fullstatusSecretos) await window.fullstatusSecretos.borrar(CLAVE_CRED); } catch (e) { /* nada */ }
   }
 
   async function iniciarSesion(correo, contrasena) {
     await pedirTokens('password', { email: correo, password: contrasena });
+    await guardarCredenciales(correo, contrasena);
   }
 
   function cerrarSesion() {
     sesion = null;
     localStorage.removeItem(CLAVE_AUTH);
+    borrarCredenciales();
     ultimoEnviado = '';
     info.estado = 'sin sesión';
     pintarBoton();
@@ -182,22 +207,53 @@
 
   // Devuelve un access_token vigente, o null si hay que volver a iniciar sesión.
   // Lanza error de red si no hay internet (el llamador lo trata como "offline").
+  // CAMBIO (19/nov/2026): (1) una sola renovación a la vez (antes varias llamadas simultáneas gastaban el mismo refresh_token y
+  // Supabase rechazaba la segunda, lo que cerraba la sesión); (2) si el token fue rotado por otra llamada se prueba con el más
+  // nuevo; (3) como último recurso se vuelve a entrar con las credenciales guardadas cifradas en este equipo.
+  let renovando = null;
+  function leerAuthGuardada() {
+    try { return JSON.parse(localStorage.getItem(CLAVE_AUTH) || 'null'); } catch (e) { return null; }
+  }
   async function obtenerToken() {
     if (sesion && Date.now() < sesion.expira) return sesion.access_token;
-    let guardada = null;
-    try { guardada = JSON.parse(localStorage.getItem(CLAVE_AUTH) || 'null'); } catch (e) { /* nada */ }
-    if (!guardada || !guardada.refresh_token) return null;
-    try {
-      await pedirTokens('refresh_token', { refresh_token: guardada.refresh_token });
+    const g0 = leerAuthGuardada();
+    if (g0 && g0.access_token && g0.expira && Date.now() < g0.expira) {
+      sesion = { access_token: g0.access_token, refresh_token: g0.refresh_token, expira: g0.expira };
       return sesion.access_token;
-    } catch (e) {
-      if (e.rechazado) { // token inválido o revocado: hay que iniciar sesión otra vez
-        localStorage.removeItem(CLAVE_AUTH);
-        sesion = null;
-        return null;
-      }
-      throw e; // error de red
     }
+    if (!renovando) renovando = renovarSesion().finally(function () { renovando = null; });
+    return renovando;
+  }
+  async function renovarSesion() {
+    const guardada = leerAuthGuardada();
+    if (guardada && guardada.refresh_token) {
+      try {
+        await pedirTokens('refresh_token', { refresh_token: guardada.refresh_token });
+        return sesion.access_token;
+      } catch (e) {
+        if (!e.rechazado) throw e; // error de red o del servidor: la sesión guardada se conserva
+        const nueva = leerAuthGuardada();
+        if (nueva && nueva.refresh_token && nueva.refresh_token !== guardada.refresh_token) {
+          try {
+            await pedirTokens('refresh_token', { refresh_token: nueva.refresh_token });
+            return sesion.access_token;
+          } catch (e2) { if (!e2.rechazado) throw e2; }
+        }
+      }
+    }
+    const cred = await leerCredenciales();
+    if (cred) {
+      try {
+        await pedirTokens('password', { email: cred.correo, password: cred.contrasena });
+        return sesion.access_token;
+      } catch (e3) {
+        if (!e3.rechazado) throw e3;
+        await borrarCredenciales(); // la contraseña ya no es válida (cambió): habrá que escribirla una vez
+      }
+    }
+    localStorage.removeItem(CLAVE_AUTH);
+    sesion = null;
+    return null;
   }
 
   // ==========================================================================
@@ -331,6 +387,7 @@
     if (!sesion && !haySesionGuardada()) {
       // --- Sin sesión: formulario de acceso (sin <form>, se envía con el botón o Enter)
       cajaCuerpo.appendChild(el('p', 'Inicia sesión con tu cuenta de administrador de Supabase (la de admin.html).'));
+      if (window.fullstatusSecretos) cajaCuerpo.appendChild(el('p', 'Solo una vez: en este equipo la sesión se mantiene sola (la contraseña se guarda cifrada por Windows). Solo «Cerrar sesión» la borra.'));
       const correo = el('input');
       correo.type = 'email';
       correo.placeholder = 'Correo';
@@ -434,8 +491,17 @@
 
   function iniciar() {
     montarInterfaz();
-    // Al abrir la app se sube una vez (si ya hay sesión) para ponerse al día.
-    if (haySesionGuardada()) setTimeout(function () { subir(false); }, 3000);
+    (async function () {
+      // Sin token guardado pero con credenciales cifradas en este equipo: entra solo, sin pedir nada.
+      if (!haySesionGuardada()) {
+        const c = await leerCredenciales();
+        if (c) {
+          try { await pedirTokens('password', { email: c.correo, password: c.contrasena }); info.estado = 'sesión iniciada'; pintarBoton(); refrescarModal(); } catch (e) { /* si falla, se verá el formulario */ }
+        }
+      }
+      // Al abrir la app se sube una vez (si ya hay sesión) para ponerse al día.
+      if (haySesionGuardada()) setTimeout(function () { subir(false); }, 3000);
+    })();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar);
   else iniciar();

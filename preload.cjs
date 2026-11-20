@@ -6,3 +6,10 @@ contextBridge.exposeInMainWorld("fullstatusPDF", {
   generar: (html, nombreSugerido) =>
     ipcRenderer.invoke("fullstatus:generar-pdf", { html: html, nombre: nombreSugerido })
 });
+
+// Secretos del equipo cifrados por el sistema (sesión de Supabase que se mantiene sola). Solo guardar / leer / borrar.
+contextBridge.exposeInMainWorld("fullstatusSecretos", {
+  guardar: (clave, valor) => ipcRenderer.invoke("fullstatus:secreto-guardar", { clave: clave, valor: valor }),
+  leer: (clave) => ipcRenderer.invoke("fullstatus:secreto-leer", clave),
+  borrar: (clave) => ipcRenderer.invoke("fullstatus:secreto-borrar", clave)
+});

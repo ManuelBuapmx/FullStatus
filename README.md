@@ -142,6 +142,13 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-19 (noche, 3) — La sesión de Supabase ya no se cierra sola (solo Electron para el auto-reingreso)
+
+- **Falla:** había que volver a iniciar sesión con frecuencia. Causas en `supabase-asistencias.js`: (1) cualquier error del servidor (429/500/503) se trataba como «sesión inválida» y borraba el token guardado; (2) varias llamadas simultáneas (subida automática, Exámenes, Calificaciones) renovaban a la vez con el mismo `refresh_token`, Supabase lo rota en cada uso y rechazaba la segunda, que cerraba la sesión.
+- **Ahora:** solo 400/401/403/422 cuentan como rechazo; una sola renovación a la vez (promesa compartida); si otra llamada ya rotó el token se prueba con el más nuevo; se guarda también el `access_token` vigente (al abrir la app no se renueva si sigue válido); y, como último recurso, la app **vuelve a entrar sola** con el correo y la contraseña guardados.
+- **Credenciales:** se guardan cifradas con `safeStorage` de Electron (DPAPI en Windows, solo este usuario de este equipo) en `<userData>/secretos.bin`, vía `window.fullstatusSecretos` (`preload.cjs`, IPC `fullstatus:secreto-*` en `electron-main.cjs`, solo desde `http://localhost:5173`). Solo «Cerrar sesión» las borra. Si la contraseña cambia en Supabase, se pide una vez. En web/Android no hay `safeStorage`: queda el token de renovación.
+- **Para activarlo:** reiniciar Electron (cambió el proceso principal) e iniciar sesión **una vez** con el botón ☁.
+
 ### 2026-11-19 (noche, 2) — Total oficial por alumno (documento de la escuela) en Calificaciones
 
 - **Por qué:** la app calcula y publica los totales desde lo capturado en local (`califDatos`) y `publicar_calificaciones` reemplaza lo de la nube; si el documento oficial de la escuela difiere de lo capturado, cualquier corrección hecha solo en Supabase se perdía en la siguiente sincronización.

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Menu, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, shell, Menu, ipcMain, dialog, safeStorage } = require("electron");
 const http = require("http");
 const fs = require("fs");
 const os = require("os");
@@ -46,6 +46,38 @@ function startLocalServer() {
   server.listen(PORT, "localhost");
   return server;
 }
+
+// Secretos del equipo (sesión de Supabase que se mantiene sola): se guardan CIFRADOS con el almacén del sistema
+// (en Windows, DPAPI: solo este usuario de este equipo puede descifrarlos). Archivo: <userData>/secretos.bin
+function rutaSecretos() { return path.join(app.getPath("userData"), "secretos.bin"); }
+function leerSecretos() {
+  try {
+    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(rutaSecretos())) return {};
+    return JSON.parse(safeStorage.decryptString(fs.readFileSync(rutaSecretos()))) || {};
+  } catch (e) { return {}; }
+}
+function escribirSecretos(obj) {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  fs.writeFileSync(rutaSecretos(), safeStorage.encryptString(JSON.stringify(obj)));
+  return true;
+}
+function origenPermitido(event) {
+  const origen = event.senderFrame ? event.senderFrame.url : "";
+  return origen.startsWith("http://localhost:" + PORT);
+}
+ipcMain.handle("fullstatus:secreto-guardar", (event, datos) => {
+  if (!origenPermitido(event) || !datos || typeof datos.clave !== "string" || typeof datos.valor !== "string") return false;
+  try { const s = leerSecretos(); s[datos.clave] = datos.valor; return escribirSecretos(s); } catch (e) { return false; }
+});
+ipcMain.handle("fullstatus:secreto-leer", (event, clave) => {
+  if (!origenPermitido(event) || typeof clave !== "string") return null;
+  const v = leerSecretos()[clave];
+  return typeof v === "string" ? v : null;
+});
+ipcMain.handle("fullstatus:secreto-borrar", (event, clave) => {
+  if (!origenPermitido(event) || typeof clave !== "string") return false;
+  try { const s = leerSecretos(); delete s[clave]; return escribirSecretos(s); } catch (e) { return false; }
+});
 
 // Genera un PDF a partir del HTML que arma la interfaz (pestaña Calificaciones):
 // lo carga en una ventana oculta sin JavaScript, lo imprime a PDF y pide dónde guardarlo.
