@@ -142,6 +142,13 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 (4) — Simplificación: se quitan los 3 botones de calificaciones oficiales / recuperación
+
+- **Quitado de Calificaciones:** «Fijar “Unidad X” con las calificaciones oficiales», «Traer unidades que falten desde la nube» y «Recuperar unidades y calificaciones desde la nube» (este último también en los estados vacíos de Calificaciones y de Historial → Unidades), junto con sus funciones manuales `fijarOficialDesdeNube` y `recuperarDesdeNube`.
+- **Queda un solo mecanismo:** `aplicarOficialesAutomatico` (al abrir, al entrar a Calificaciones, al volver el internet y cada 5 min). Avisa con un aviso discreto «Calificaciones oficiales aplicadas.» cuando cambia algo y, si el servidor falla, «No se pudieron aplicar las calificaciones oficiales: …» una sola vez por sesión; sin internet reintenta en silencio.
+- **Consecuencia:** si el profesor escribe algo a mano en un alumno con total oficial, ese alumno queda sin oficial (`oficialQuitado`) y ya no hay botón para reponerlo; para reponerlo basta borrar el campo `oficialQuitado` de ese alumno en el estado local o volver a cargar el dato.
+- La RPC `recuperar_datos_grupo` se conserva: la usa la rutina automática para traer una unidad que falte; `obtener_calificaciones_oficiales` y la tabla `calificaciones_oficiales` no cambian.
+
 ### 2026-11-20 (3) — Botón «⟳ Actualizar» dentro de la app (sin terminal)
 
 - **Archivos:** `actualizador.js` (interfaz, cargado desde `index.html`), IPC en `electron-main.cjs` (`fullstatus:actualizar-revisar` / `-aplicar` / `recargar` / `reiniciar`) y `preload.cjs` (`window.fullstatusActualizar`). `actualizador.js` también está en `build.files` de `package.json`.
