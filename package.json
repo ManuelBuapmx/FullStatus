@@ -1,6 +1,6 @@
 {
   "name": "fullstatus",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Registro institucional de asistencia",
   "main": "electron-main.cjs",
   "scripts": {

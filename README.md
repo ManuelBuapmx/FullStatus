@@ -142,6 +142,11 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 — Versión 1.0.1 empaquetada
+
+- Se subió la versión a 1.0.1 en `package.json` y se generó `dist\FullStatus Setup 1.0.1.exe` (`npm run dist:windows`).
+- Se revirtió un intento de publicar remediales con `publicar_etapas` (borraba resultados remediales existentes). Pendiente: crear la fila «Materia · Unidad N · Remedial» en Supabase para que el botón aparezca «No disponible» en FullStatus Student.
+
 ### 2026-11-20 — Remediales y extraordinarios OFICIALES: se aplican solos desde la nube
 
 - **Pedido:** capturar la «Acción Remedial 1» (PDF de la escuela del 20/11/2026) de 4C, Ética Profesional, Unidad 1: los 5 alumnos que reprobaron la unidad (5, 5, 5, 4 y 4) sacaron 7, 7, 7, 6 y 7 (promedio 6.80, 1 reprobado: Ortiz con 6).
