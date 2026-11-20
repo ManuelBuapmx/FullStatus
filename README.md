@@ -142,6 +142,22 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 (5) — 05:25 UTC (11:25 p. m. del 19/nov, hora de México) — Un grupo sin unidades las repone solo desde la nube
+
+- **Falla encontrada:** el grupo 12F se quedó sin unidades en Calificaciones («Este grupo no tiene unidades») aunque sus unidades y calificaciones seguían publicadas en Supabase (`unidades` y `calificaciones_unidad`). La rutina automática solo traía las unidades de la nube a los grupos que tenían calificaciones oficiales (`continue` cuando `obtener_calificaciones_oficiales` devolvía vacío).
+- **Cambio (`app.js`):** nueva `restaurarGrupoDesdeNube(g, rec)`, usada por `aplicarOficialesAutomatico` ANTES de mirar las oficiales: si el grupo no tiene ninguna unidad, llama a `recuperar_datos_grupo` (una vez por sesión por grupo, o al forzar) y repone unidades y calificaciones publicadas. Es aditiva: no agrega unidades que se empalmen ni repetidas por nombre, solo llena a alumnos sin datos capturados y deja las columnas en modo «Calificación (0-10)» (mismos puntos que ya estaban publicados). Aviso: «Se recuperaron desde la nube las unidades y calificaciones de: …».
+- **Límite:** lo que se recupera son los **puntos publicados**, no las capturas originales; lo que nunca se publicó no se puede reponer.
+
+### 2026-11-20 (5b) — Resumen de cambios del 11 al 19 de noviembre que faltaban en este historial
+
+- **Calificaciones → lista «Etapa»** junto a la unidad: Ordinario siempre; Remedial y Extraordinario 1-3 solo si hay reprobados que la necesiten (reprobado = examen capturado y total menor al mínimo del modelo, `CALIF_MINIMA`). Cada etapa tiene su tabla de captura (0-10) y se guarda en `califDatos[grupo][unidad].etapas`. Botón **«Publicar … a los alumnos»** → RPC `publicar_etapas`: la calificación queda como examen «presentado» (correctas = calificación × 10 de 100) en la materia «Materia · Unidad N · Tipo»; a quien no aprobó se le crea (si falta) el siguiente examen sin preguntas, que el alumno ve inactivo («Aún no abre»).
+- **Calificaciones → «Pegar participaciones desde Excel»:** pegar nombre + número; se asigna por nombre (exacto, orden distinto, palabras de más o de menos o error de dedo de distancia ≤ 2, solo si es único) a la columna «Partic.» de la unidad a la vista. Pide confirmar si reemplaza valores.
+- **Grupos → Estudiantes:** se muestra la matrícula de cada alumno (RPC `consultar_matriculas`) y el botón **Editar** para agregarla o corregirla (RPC `guardar_matricula`, solo admin: en una edición cambia la matrícula también en asistencias, calificaciones, intentos y resultados, todo o nada). Se quitaron los avisos de «nombre parecido».
+- **Resultados:** ya no tiene su propio inicio de sesión con correo y contraseña; usa la sesión de «☁ Alumnos».
+- **Supabase (funciones):** `_alumno_por_nombre_flexible` (empata por nombre cuando a uno de los dos le sobran o faltan palabras; solo si es único y con ≥ 3 palabras) usada por `consultar_matriculas`, `publicar_asistencias` y `publicar_calificaciones`; `_motivo_no_disponible` (un examen sin preguntas activas se ve inactivo); `_elegible_siguiente_examen` (el Remedial sale a quien reprobó la unidad aunque no haya presentado el ordinario; los Extraordinarios, a quien presentó el examen del tipo anterior y no lo aprobó); trigger que activa solo las materias nuevas (`activa = true`).
+- **Regla del proyecto (dicha por el usuario el 11/nov):** el registro de estudiantes (Supabase `alumnos`) y el Excel de Drive deben ser **uno solo**; si un nombre difiere, queda el del Excel. Pendiente: dar de alta en `alumnos` a los alumnos del Excel que aún no existen (4C, 10A, 1C, 7A y algunos de 7B/10B) cuando haya sus matrículas.
+- **Forma de trabajo (dicha por el usuario el 19/nov):** los cambios se suben directo a GitHub y a Supabase; no se le entregan archivos.
+
 ### 2026-11-20 (4) — Simplificación: se quitan los 3 botones de calificaciones oficiales / recuperación
 
 - **Quitado de Calificaciones:** «Fijar “Unidad X” con las calificaciones oficiales», «Traer unidades que falten desde la nube» y «Recuperar unidades y calificaciones desde la nube» (este último también en los estados vacíos de Calificaciones y de Historial → Unidades), junto con sus funciones manuales `fijarOficialDesdeNube` y `recuperarDesdeNube`.
