@@ -2242,6 +2242,8 @@
   var calUnidad = "";
   // PRISMAL MESH: «Pegar participaciones desde Excel» (Calificaciones). Texto pegado y resultado del último intento.
   var pegarPartic = "", pegarPartMsg = "", pegarPartAbierto = false;
+  // PRISMAL MESH: «Cómo capturas cada columna» va plegado (casi nunca se cambia); si se despliega se queda así al redibujar.
+  var modosCalifAbierto = false;
   // PRISMAL MESH: etapa que se está viendo en Calificaciones: "ordinario" (la tabla de siempre) o una etapa de
   // regularización ("remedial", "ext1", "ext2", "ext3") que solo existe mientras haya alumnos reprobados que la necesiten.
   var calEtapa = "ordinario";
@@ -2795,6 +2797,15 @@
       if(inp) inp.placeholder = "Auto (" + r.escala[col.campo].auto + ")";
     });
   }
+  // Una línea con el modo de captura vigente de cada columna, para verlo sin desplegar el cuadro.
+  function resumenModosCalif(r){
+    return CALIF_COLUMNAS.map(function(col){
+      var c = r.cfg[col.campo];
+      var t = c.modo === "porcentaje" ? "% (0-100)" : (c.modo === "calificacion" ? "0-10"
+            : "escala (máx. " + (String(c.max == null ? "" : c.max).trim() ? String(c.max).trim() : "automático") + ")");
+      return col.titulo + ": " + t;
+    }).join(" · ");
+  }
   // ---- Pegar participaciones desde Excel ----
   // Cada línea: nombre + número de participaciones (separados por tabulador, coma o punto y coma; sirve pegar celdas de
   // Excel o un CSV con más columnas: el nombre es el campo con más letras y el número, el último). Se asigna por nombre a los
@@ -2988,7 +2999,7 @@
     html += '</div></div>';
 
     // Cómo se captura cada columna.
-    html += '<div class="card compacta"><h2>Cómo capturas cada columna</h2>';
+    html += '<div class="card compacta"><details id="detModosCalif"'+(modosCalifAbierto ? ' open' : '')+'><summary style="cursor:pointer;"><b>Cómo capturas cada columna</b> <span class="helptext" style="margin:0 0 0 8px;">'+esc(resumenModosCalif(r))+' · <u>Cambiar</u></span></summary>';
     html += '<p class="helptext" style="margin-top:0;">Elige si escribes porcentaje (0-100), calificación (0-10) o escala. En escala puedes poner el máximo o dejarlo vacío para que se calcule solo a partir del valor más alto capturado (en participación, con tope de 10).</p>';
     html += '<div class="row" style="align-items:flex-end;">';
     CALIF_COLUMNAS.forEach(function(col){
@@ -3002,7 +3013,7 @@
         html += '<div class="field" style="margin-bottom:0;width:130px;"><label for="max_'+col.campo+'">Máximo</label><input type="text" inputmode="decimal" id="max_'+col.campo+'" data-calif-max="'+col.campo+'" value="'+esc(c.max)+'" placeholder="Auto ('+r.escala[col.campo].auto+')"></div>';
       }
     });
-    html += '</div></div>';
+    html += '</div></details></div>';
 
     html += '<div class="card compacta"><details id="detPegarPartic"'+(pegarPartAbierto ? ' open' : '')+'><summary style="cursor:pointer;font-weight:600;">Pegar participaciones desde Excel</summary>';
     html += '<p class="helptext">Pega una línea por alumno con su nombre y su número de participaciones (celdas copiadas de Excel o un CSV). Se asignan por nombre a los alumnos de este grupo y se escriben en la columna «Partic.» de <b>'+esc(unidad.nombre)+'</b>.</p>';
@@ -3229,6 +3240,8 @@
       var g = grupoActivo(); if(g) delete matPorGrupo[g.id];
       render();
     });
+    var detModos = document.getElementById("detModosCalif");
+    if(detModos) detModos.addEventListener("toggle", function(){ modosCalifAbierto = detModos.open; });
     var detPegar = document.getElementById("detPegarPartic");
     if(detPegar) detPegar.addEventListener("toggle", function(){ pegarPartAbierto = detPegar.open; });
     var txtPegar = document.getElementById("txtPegarPartic");

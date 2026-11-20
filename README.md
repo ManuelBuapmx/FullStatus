@@ -142,6 +142,10 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 (6) — 05:29 UTC (19/11 11:29 p. m., hora de México) — Calificaciones: «Cómo capturas cada columna» va plegado
+
+- **Cambio de usabilidad (`app.js`):** el cuadro con los modos de captura de Exámen, Partic. y Trabajos ocupaba media pantalla arriba de la tabla aunque casi nunca se cambia. Ahora es un `<details>` cerrado que muestra en una línea el modo vigente de cada columna (`resumenModosCalif`, p. ej. «Exámen: 0-10 · Partic.: escala (máx. automático) · Trabajos en clase: escala (máx. 13)») y se despliega con «Cambiar». Si se despliega, queda abierto al redibujar (`modosCalifAbierto`). Los selectores y sus manejadores son los mismos: no cambia ningún cálculo ni dato.
+
 ### 2026-11-20 (5) — 05:25 UTC (11:25 p. m. del 19/nov, hora de México) — Un grupo sin unidades las repone solo desde la nube
 
 - **Falla encontrada:** el grupo 12F se quedó sin unidades en Calificaciones («Este grupo no tiene unidades») aunque sus unidades y calificaciones seguían publicadas en Supabase (`unidades` y `calificaciones_unidad`). La rutina automática solo traía las unidades de la nube a los grupos que tenían calificaciones oficiales (`continue` cuando `obtener_calificaciones_oficiales` devolvía vacío).
