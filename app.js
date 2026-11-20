@@ -443,7 +443,7 @@
     state.grupos.forEach(ordenarEstudiantes);
     if(currentTab === "grupos") panel.innerHTML = renderGrupos();
     else if(currentTab === "pasar") panel.innerHTML = renderPasar();
-    else if(currentTab === "calificaciones") panel.innerHTML = renderCalificaciones();
+    else if(currentTab === "calificaciones"){ panel.innerHTML = renderCalificaciones(); setTimeout(function(){ aplicarOficialesAutomatico(false); }, 0); }
     else if(currentTab === "resultados") panel.innerHTML = renderResultados();
     // Exámenes: lo dibuja supabase-examenes.js (conserva su propio estado entre renders).
     else if(currentTab === "examenes"){
@@ -2379,6 +2379,7 @@
       asignar.forEach(function(a){
         if(!datos.alumnos[a.est.id]) datos.alumnos[a.est.id] = {};
         datos.alumnos[a.est.id].oficial = a.total;
+        delete datos.alumnos[a.est.id].oficialQuitado;
       });
       guardarCalificaciones();
       render();
@@ -2389,6 +2390,72 @@
     var b = ev.target && ev.target.closest ? ev.target.closest("[data-oficial-nube]") : null;
     if(b) fijarOficialDesdeNube();
   });
+
+  // PRISMAL MESH (20/nov/2026): aplica SOLA las calificaciones oficiales de la nube a todos los grupos, sin botón:
+  // al abrir la app, al entrar a Calificaciones, al volver el internet y cada 5 minutos. Si falta localmente una unidad que
+  // tiene calificaciones oficiales, la trae de la nube (solo agrega: no empalma ni sobrescribe). Respeta a los alumnos en los
+  // que el profesor escribió algo a mano (oficialQuitado); el botón «Fijar…» los vuelve a fijar. Sin sesión no hace nada.
+  var autoOficialEnCurso = false, autoOficialUltimo = 0;
+  async function aplicarOficialesAutomatico(forzar){
+    if(autoOficialEnCurso) return;
+    if(!forzar && Date.now() - autoOficialUltimo < 60000) return;
+    var api = window.FullStatusSupabase;
+    if(!api || !api.rpc || !state.grupos.length) return;
+    autoOficialEnCurso = true;
+    var cambioUnidades = false, cambioCalif = false;
+    function claveOrd(t){ return claveIdentidad(t).split(" ").sort().join(" "); }
+    try{
+      for(var gi = 0; gi < state.grupos.length; gi++){
+        var g = state.grupos[gi];
+        var args = {p_grupo: g.grupoBase || g.nombre || "", p_materia: g.materia || ""};
+        var of = await api.rpc("obtener_calificaciones_oficiales", args);
+        if(of && of.sinSesion) return;
+        if(!Array.isArray(of) || !of.length) continue;
+        if(!Array.isArray(g.unidades)) g.unidades = [];
+        var nombresOf = {};
+        of.forEach(function(o){ nombresOf[claveIdentidad(o.unidad)] = true; });
+        var faltan = Object.keys(nombresOf).filter(function(k){
+          return !g.unidades.some(function(u){ return claveIdentidad(u.nombre) === k; });
+        });
+        if(faltan.length){
+          var rec = await api.rpc("recuperar_datos_grupo", args);
+          ((rec && Array.isArray(rec.unidades)) ? rec.unidades : []).forEach(function(u){
+            var k = claveIdentidad(u.nombre);
+            if(faltan.indexOf(k) < 0 || !u.desde || !u.hasta) return;
+            var empalma = g.unidades.some(function(x){ return u.desde <= x.hasta && u.hasta >= x.desde; });
+            if(empalma) return;
+            g.unidades.push({id: uid(), nombre: String(u.nombre).trim(), desde: u.desde, hasta: u.hasta});
+            cambioUnidades = true;
+          });
+        }
+        var porNombre = {}, repN = {}, porOrden = {}, repO = {};
+        g.estudiantes.forEach(function(e){
+          var k = claveIdentidad(e.nombre), ko = claveOrd(e.nombre);
+          if(porNombre[k]) repN[k] = true; else porNombre[k] = e;
+          if(porOrden[ko]) repO[ko] = true; else porOrden[ko] = e;
+        });
+        of.forEach(function(o){
+          var unidad = g.unidades.find(function(u){ return claveIdentidad(u.nombre) === claveIdentidad(o.unidad); });
+          if(!unidad) return;
+          var k = claveIdentidad(o.alumno), ko = claveOrd(o.alumno);
+          var est = (porNombre[k] && !repN[k]) ? porNombre[k] : ((porOrden[ko] && !repO[ko]) ? porOrden[ko] : null);
+          if(!est) return;
+          var datos = califBucket(g.id, unidad.id);
+          var d = datos.alumnos[est.id] || (datos.alumnos[est.id] = {});
+          if(d.oficialQuitado) return;
+          if(d.oficial != null && Number(d.oficial) === Number(o.total)) return;
+          d.oficial = Number(o.total);
+          cambioCalif = true;
+        });
+      }
+    }catch(e){ /* sin internet o error momentáneo: se reintenta solo */ }
+    finally{ autoOficialEnCurso = false; autoOficialUltimo = Date.now(); }
+    if(cambioUnidades) saveState(false);
+    if(cambioCalif) guardarCalificaciones();
+    if(cambioUnidades || cambioCalif) render();
+  }
+  window.addEventListener("online", function(){ setTimeout(function(){ aplicarOficialesAutomatico(true); }, 2000); });
+  setInterval(function(){ aplicarOficialesAutomatico(false); }, 300000);
   function numCalif(v){
     var n = parseFloat(String(v == null ? "" : v).replace(",", "."));
     return isFinite(n) && n >= 0 ? n : 0;
@@ -2995,7 +3062,7 @@
     html += '</details></div>';
 
     html += '<div class="card compacta"><div class="row"><button class="btn" data-oficial-nube="1">Fijar «'+esc(unidad.nombre)+'» con las calificaciones oficiales</button> <button class="btn secondary" data-recuperar-nube="1">Traer unidades que falten desde la nube</button></div>'
-      + '<p class="helptext">Toma de la nube las calificaciones oficiales de esta unidad (las del documento de la escuela) y deja ese total en cada alumno. Se marca con ● y es lo que se publica. Si escribes algo a mano en un alumno, ese alumno vuelve a calcularse solo.</p></div>';
+      + '<p class="helptext">Las calificaciones oficiales (las del documento de la escuela) se aplican solas al abrir la app y al entrar aquí; se marcan con ● y es lo que se publica. Este botón solo las vuelve a fijar a mano (también en los alumnos donde escribiste algo). Si escribes algo a mano en un alumno, ese alumno vuelve a calcularse solo.</p></div>';
     html += '<div class="card compacta">';
     if(g.estudiantes.length === 0){
       return html + '<p class="empty">Este grupo no tiene estudiantes todavía.</p></div>';
@@ -3191,7 +3258,7 @@
         var datos = califBucket(g.id, u.id), id = inp.getAttribute("data-estudiante");
         if(!datos.alumnos[id]) datos.alumnos[id] = {};
         datos.alumnos[id][inp.getAttribute("data-calif")] = inp.value;
-        delete datos.alumnos[id].oficial; // lo escrito a mano manda: ese alumno vuelve a calcularse solo
+        if(datos.alumnos[id].oficial != null){ delete datos.alumnos[id].oficial; datos.alumnos[id].oficialQuitado = true; } // lo escrito a mano manda: ese alumno vuelve a calcularse solo y el automático lo respeta
         // Lo escrito a mano manda: esa celda deja de ser automática y el examen ya no la pisa.
         if(inp.getAttribute("data-calif") === "examen" && datos.autoExamen){ delete datos.autoExamen[id]; inp.classList.remove("calif-auto"); inp.removeAttribute("title"); }
         guardarCalificaciones(); refrescarTotalesCalif();
@@ -3856,5 +3923,7 @@
   restaurarCacheLocal().then(function(){
     setTab("pasar");
     sincronizarPendientes();
+    // Calificaciones oficiales de la escuela: se aplican solas al abrir (espera un momento a que la sesión esté lista).
+    setTimeout(function(){ aplicarOficialesAutomatico(true); }, 4000);
   });
 })();

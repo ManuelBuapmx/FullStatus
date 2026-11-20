@@ -142,6 +142,12 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-20 — Calificaciones oficiales automáticas (sin botón)
+
+- `aplicarOficialesAutomatico` (app.js) aplica solas las calificaciones oficiales de `calificaciones_oficiales` a TODOS los grupos: al abrir la app (4 s después de cargar), al entrar a la pestaña Calificaciones, al volver el internet y cada 5 min (con un mínimo de 60 s entre corridas). Si a un grupo le falta localmente una unidad que tiene oficiales, la trae de la nube (solo agrega: no empalma con otra ni sobrescribe). Sin sesión o sin internet no hace nada y reintenta.
+- Si el profesor escribe algo a mano en un alumno, se marca `oficialQuitado` y el automático lo respeta; el botón «Fijar…» sigue disponible para volver a fijarlo.
+- Para oficializar otra unidad/grupo basta insertar sus filas en `calificaciones_oficiales`; la app las toma sola.
+
 ### 2026-11-19 (noche, 3) — La sesión de Supabase ya no se cierra sola (solo Electron para el auto-reingreso)
 
 - **Falla:** había que volver a iniciar sesión con frecuencia. Causas en `supabase-asistencias.js`: (1) cualquier error del servidor (429/500/503) se trataba como «sesión inválida» y borraba el token guardado; (2) varias llamadas simultáneas (subida automática, Exámenes, Calificaciones) renovaban a la vez con el mismo `refresh_token`, Supabase lo rota en cada uso y rechazaba la segunda, que cerraba la sesión.
