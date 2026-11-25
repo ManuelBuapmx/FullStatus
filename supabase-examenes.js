@@ -508,6 +508,7 @@
   var borrador = leerBorrador();
   var est = {
     materias: [],                             // filas de la tabla `materias` (id, nombre, activa, orden)
+    materiaUnidades: [],                      // filas de `materia_unidades` (materia, nombre, unidades): las materias que existen y cuántas unidades tiene cada una
     materiaNombre: borrador.materiaNombre || '',   // materia elegida en la lista (inglés de los grupos o Ética)
     unidad: (Number(borrador.unidad) >= 1 && Number(borrador.unidad) <= MAX_UNIDADES) ? String(Number(borrador.unidad)) : '1',
     tipo: TIPOS_EXAMEN.indexOf(borrador.tipo) >= 0 ? borrador.tipo : 'Ordinario',
@@ -535,7 +536,13 @@
   }
 
   function cargarMaterias() {
-    return rest('materias?select=id,nombre,activa,orden,abre_en,cierra_en,solo_asignados&order=orden.asc').then(function (filas) { est.materias = filas || []; });
+    // PRISMAL MESH (25/nov/2026): además de `materias` se lee `materia_unidades` (materia + número de unidades). Antes la lista de
+    // materias salía solo de `materias`, donde hoy solo hay filas de exámenes («INGLÉS VI · Unidad 2»), y por eso no ofrecía
+    // materias como Pedagogía. Si esa tabla no se puede leer, se sigue como antes.
+    var pedirUnidades = rest('materia_unidades?select=materia,nombre,unidades&order=nombre.asc').then(function (f) { return Array.isArray(f) ? f : []; }, function (e) { if (e && e.sinSesion) throw e; return []; });
+    return Promise.all([rest('materias?select=id,nombre,activa,orden,abre_en,cierra_en,solo_asignados&order=orden.asc'), pedirUnidades]).then(function (r) {
+      est.materias = r[0] || []; est.materiaUnidades = r[1] || [];
+    });
   }
   // Solo se leen id, orden, activa, texto y seccion: NUNCA la respuesta correcta.
   function cargarExistentes(mid) {
@@ -557,8 +564,14 @@
   // Materias que ofrece la lista: las MATERIAS BASE de Supabase (la misma lista que ve FullStatus Student:
   // INGLES 1, INGLES VI, PEDAGOGIA, ETICA PROFESIONAL...), sin las «Materia · Tipo». Solo si la tabla
   // está vacía o no se pudo leer se usan, de respaldo, las materias de inglés/Ética de los grupos.
+  // Materia base de un examen: «INGLÉS VI · Unidad 2 · Remedial» → «INGLÉS VI».
+  function baseDeExamen(nombre) { return String(nombre || '').replace(/\s*[\u00b7-]\s*unidad\s*[0-9]+.*$/i, '').trim(); }
   function materiasDisponibles() {
-    var base = est.materias.filter(function (m) { return !esMateriaDeTipo(m.nombre); }).map(function (m) { return m.nombre; });
+    var base = [], vistos = {};
+    function agregar(n) { var k = clave(n); if (n && k && !vistos[k]) { vistos[k] = true; base.push(n); } }
+    est.materiaUnidades.forEach(function (m) { agregar(m.nombre); });                                        // las materias dadas de alta (con sus unidades)
+    est.materias.forEach(function (m) { if (!esMateriaDeTipo(m.nombre)) agregar(m.nombre); });                // materias base sueltas en `materias`
+    est.materias.forEach(function (m) { if (esMateriaDeTipo(m.nombre)) agregar(baseDeExamen(m.nombre)); });  // las que ya tienen examen por unidad
     if (base.length) return base;
     var lista = [], vistos = {}, grupos = [];
     try { if (typeof window.FullStatusMateriasGrupos === 'function') grupos = window.FullStatusMateriasGrupos() || []; } catch (e) { grupos = []; }
@@ -569,9 +582,17 @@
     if (!lista.length) lista.push('\u00c9tica profesional');
     return lista;
   }
+  // Cuántas unidades ofrece la lista: las de `materia_unidades` para la materia elegida; si no está dada de alta, MAX_UNIDADES.
+  function unidadesDeLaMateria() {
+    var k = clave(est.materiaNombre);
+    var fila = est.materiaUnidades.find(function (m) { return clave(m.nombre) === k; });
+    var n = fila ? Number(fila.unidades) : 0;
+    return n >= 1 ? n : MAX_UNIDADES;
+  }
   function asegurarMateria() {
     var op = materiasDisponibles();
     if (op.indexOf(est.materiaNombre) < 0) est.materiaNombre = op[0] || '';
+    if (Number(est.unidad) > unidadesDeLaMateria()) est.unidad = '1';   // p. ej. venías de «Unidad 3» y la materia nueva solo tiene 2
   }
   // Ordinario usa la materia tal cual; los demás tipos van a «<Materia> · <Tipo>».
   // PRISMAL MESH (11/nov/2026): cada unidad tiene su propio Ordinario, Remedial y Extraordinarios, así que
@@ -654,12 +675,14 @@
     asegurarMateria();
     // Cualquier cambio del destino: se guarda el borrador y se vuelve a ubicar la materia destino.
     function cambio(campo, valor) {
-      est[campo] = valor; est.confirmando = false; guardarBorrador();
+      est[campo] = valor; est.confirmando = false;
+      if (campo === 'materiaNombre' && Number(est.unidad) > unidadesDeLaMateria()) est.unidad = '1';
+      guardarBorrador();
       actualizarDestino().then(pintar).catch(function (e) { fallo(e, ''); });
       pintar();
     }
     var unidades = [];
-    for (var u = 1; u <= MAX_UNIDADES; u++) unidades.push({ valor: String(u), texto: 'Unidad ' + u });
+    for (var u = 1; u <= unidadesDeLaMateria(); u++) unidades.push({ valor: String(u), texto: 'Unidad ' + u });
     var info = '', aviso = '';
     // Si Supabase no devolvió ninguna materia, la lista es el respaldo (grupos): se avisa en rojo.
     if (!est.materias.length) {

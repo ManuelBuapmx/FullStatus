@@ -142,6 +142,16 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-25 — Examen de prueba de Pedagogía (Unidad 2) y lista de materias de la pestaña Exámenes
+
+- **Pedido:** crear un examen ficticio de 5 preguntas para la Unidad 2 de Pedagogía (materia de prueba con 2 unidades) y que se vea en FullStatus Student y se guarde una calificación real.
+- **Supabase:** `materia_unidades` ← `pedagogia / PEDAGOGÍA / 2` (con esto el alumno ve «Unidad 1: aún no hay examen» y «Unidad 2»); `materias` ← «PEDAGOGÍA · Unidad 2» (id 22, activa, `solo_asignados`: solo la ve el grupo de prueba, ya que `config.grupo_prueba = 12F`, o quien se asigne); `preguntas` ← 5 preguntas de opción múltiple (teorías del aprendizaje, `seccion = 'Unidad 2'`). Nueva política `admin puede leer materia_unidades` (SELECT, solo la cuenta de administrador) y `grant select ... to authenticated`: sin ella FullStatus no podía leer esa tabla (RLS sin políticas).
+- **`supabase-examenes.js` (pestaña Exámenes):** la lista de materias salía solo de `materias`, donde hoy solo hay filas de exámenes («INGLÉS VI · Unidad 2»), por eso ofrecía únicamente las materias de inglés/Ética de los grupos. Ahora `cargarMaterias` lee también `materia_unidades` y `materiasDisponibles` junta: materias dadas de alta, materias base sueltas y las que ya tienen examen por unidad (`baseDeExamen`). La lista de **Unidad** ya no es siempre 1-5: usa las unidades de la materia (`unidadesDeLaMateria`; Pedagogía = 2) y, si no está dada de alta o no hay permiso, `MAX_UNIDADES`. Al cambiar de materia, una unidad que ya no existe vuelve a «Unidad 1».
+- **FullStatus Student:** sin cambios de código; todo llega por `mis_materias` / `mis_examenes` (verificado: el alumno de prueba ve Pedagogía con Unidad 1 «sin examen» y Unidad 2 «disponible»; un alumno real no ve la materia).
+- **Calificación:** `calificar_examen` guarda en `resultados` (matrícula, grupo, correctas, total). En Calificaciones, 12F · Unidad 2 · Exámen se llena solo (5/5 = 10, 4/5 = 8, probado con el motor real y datos simulados).
+- **Repetir la prueba:** cada alumno solo tiene un intento por examen (`intentos`); para volver a presentarlo hay que borrar su fila de `intentos` y de `resultados` de la materia 22.
+- **Probado solo con `node`** (lógica de la lista y de la captura automática); no en Electron ni en el celular.
+
 ### 2026-11-20 — Remediales y extraordinarios OFICIALES: se aplican solos desde la nube
 
 - **Pedido:** capturar la «Acción Remedial 1» (PDF de la escuela del 20/11/2026) de 4C, Ética Profesional, Unidad 1: los 5 alumnos que reprobaron la unidad (5, 5, 5, 4 y 4) sacaron 7, 7, 7, 6 y 7 (promedio 6.80, 1 reprobado: Ortiz con 6).
