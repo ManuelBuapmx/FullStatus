@@ -1058,17 +1058,20 @@
       unidadPrevia = uid_;
       html += '<th'+(inicio?' class="unidad-inicio"':'')+'>'+displayFecha(f)+(unidades.length?'<small class="unidad-etiqueta">'+(u?esc(u.nombre):"Sin unidad")+'</small>':'')+"</th>";
     });
-    html += "<th>Total presente</th></tr></thead><tbody>";
+    html += "<th>Total presente</th>";
+    // Faltas del periodo visible: si hay una unidad seleccionada (o un rango de fechas), solo cuenta esas fechas.
+    html += '<th title="Faltas en las fechas mostradas (incluye 1 falta por cada 3 retardos)">Faltas'+(unidadSel?'<small class="unidad-etiqueta">'+esc(unidadSel.nombre)+'</small>':'')+"</th></tr></thead><tbody>";
     estudiantesVista.forEach(function(e){
       html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+"</td>";
       if(matVisible) html += '<td class="helptext" style="white-space:nowrap;">'+celdaMatriculaHtml(cacheMat, e)+'</td>';
-      var totalP = 0, totalR = 0;
+      var totalP = 0, totalR = 0, totalA = 0;
       var unidadPreviaFila = null;
       fechas.forEach(function(f, i){
         var v = ((state.asistencias[g.id] || {})[f] || {})[e.id] || "";
         var justificada = v === "A" && esJustificada(g.id, f, e.id);
         if(v==="P" || justificada) totalP++;
         else if(v==="R") totalR++;
+        else if(v==="A") totalA++; // falta sin justificar (las justificadas ya contaron como presentes)
         var uf = unidadDeFecha(g, f);
         var ufId = uf ? uf.id : "";
         var inicioCelda = unidades.length && i > 0 && ufId !== unidadPreviaFila;
@@ -1078,7 +1081,10 @@
         var atributos = (v==="A") ? ' data-justificar data-estudiante="'+esc(e.id)+'" data-fecha="'+esc(f)+'" title="Tocar para '+(justificada?"quitar el justificante":"marcar como justificada")+'"' : '';
         html += '<td class="'+clase+'"'+atributos+'>'+texto+"</td>";
       });
-      html += "<td><b>"+totalAsistencias(totalP, totalR)+"</b></td></tr>";
+      html += "<td><b>"+totalAsistencias(totalP, totalR)+"</b></td>";
+      // Misma regla que "Total presente": faltas + 1 por cada 3 retardos, así presentes + faltas = días mostrados.
+      var faltasVista = faltasEquivalentes(totalA, totalR);
+      html += '<td><b'+(faltasVista>0?' style="color:var(--falta)"':'')+'>'+faltasVista+"</b></td></tr>";
     });
     html += "</tbody></table></div>";
 

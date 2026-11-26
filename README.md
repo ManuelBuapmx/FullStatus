@@ -142,6 +142,24 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-26 09:39 (hora de México) — Historial: columna "Faltas" por unidad seleccionada
+
+- **Pedido:** en la pestaña Historial y exportar, mostrar el número de faltas de cada alumno en la unidad seleccionada.
+- **`app.js` (`renderHistorial`):** nueva columna **Faltas** a la derecha de "Total presente". Cuenta solo las fechas que muestra la tabla, así que al elegir una unidad en el selector "Unidad" (o un rango Desde/Hasta) el número corresponde a ese periodo; con "Todas las unidades" es el total. Si hay una unidad elegida, su nombre aparece bajo el encabezado.
+- **Regla de conteo:** faltas sin justificar + 1 por cada 3 retardos (`faltasEquivalentes`, la misma regla de siempre). Las faltas justificadas ("J") no cuentan como falta. Así, para cada alumno: Total presente + Faltas = días mostrados.
+- No cambia el modelo de datos, el Excel institucional ni "Copiar para pegar en Excel" (la matriz exportada sigue igual).
+- Verificado con `node --check app.js`; falta probarlo visualmente en Electron y Android. Después de copiar el archivo hay que ejecutar `npm run sync:www`.
+
+### 2026-11-25 — Examen de prueba de Pedagogía (Unidad 2) y lista de materias de la pestaña Exámenes
+
+- **Pedido:** crear un examen ficticio de 5 preguntas para la Unidad 2 de Pedagogía (materia de prueba con 2 unidades) y que se vea en FullStatus Student y se guarde una calificación real.
+- **Supabase:** `materia_unidades` ← `pedagogia / PEDAGOGÍA / 2` (con esto el alumno ve «Unidad 1: aún no hay examen» y «Unidad 2»); `materias` ← «PEDAGOGÍA · Unidad 2» (id 22, activa, `solo_asignados`: solo la ve el grupo de prueba, ya que `config.grupo_prueba = 12F`, o quien se asigne); `preguntas` ← 5 preguntas de opción múltiple (teorías del aprendizaje, `seccion = 'Unidad 2'`). Nueva política `admin puede leer materia_unidades` (SELECT, solo la cuenta de administrador) y `grant select ... to authenticated`: sin ella FullStatus no podía leer esa tabla (RLS sin políticas).
+- **`supabase-examenes.js` (pestaña Exámenes):** la lista de materias salía solo de `materias`, donde hoy solo hay filas de exámenes («INGLÉS VI · Unidad 2»), por eso ofrecía únicamente las materias de inglés/Ética de los grupos. Ahora `cargarMaterias` lee también `materia_unidades` y `materiasDisponibles` junta: materias dadas de alta, materias base sueltas y las que ya tienen examen por unidad (`baseDeExamen`). La lista de **Unidad** ya no es siempre 1-5: usa las unidades de la materia (`unidadesDeLaMateria`; Pedagogía = 2) y, si no está dada de alta o no hay permiso, `MAX_UNIDADES`. Al cambiar de materia, una unidad que ya no existe vuelve a «Unidad 1».
+- **FullStatus Student:** sin cambios de código; todo llega por `mis_materias` / `mis_examenes` (verificado: el alumno de prueba ve Pedagogía con Unidad 1 «sin examen» y Unidad 2 «disponible»; un alumno real no ve la materia).
+- **Calificación:** `calificar_examen` guarda en `resultados` (matrícula, grupo, correctas, total). En Calificaciones, 12F · Unidad 2 · Exámen se llena solo (5/5 = 10, 4/5 = 8, probado con el motor real y datos simulados).
+- **Repetir la prueba:** cada alumno solo tiene un intento por examen (`intentos`); para volver a presentarlo hay que borrar su fila de `intentos` y de `resultados` de la materia 22.
+- **Probado solo con `node`** (lógica de la lista y de la captura automática); no en Electron ni en el celular.
+
 ### 2026-11-20 — Versión 1.0.1 empaquetada
 
 - Se subió la versión a 1.0.1 en `package.json` y se generó `dist\FullStatus Setup 1.0.1.exe` (`npm run dist:windows`).
