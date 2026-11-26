@@ -427,12 +427,26 @@
   // =========================================================================
   function normalizarTexto(s) { return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim(); }
 
+  // PRISMAL MESH (11/nov/2026): cada sección del examen es una pantalla distinta en FullStatus Student, que
+  // agrupa las preguntas por el texto de `preguntas.seccion`. Para conservar la unidad (que leen
+  // `unidades_materia` y la pestaña Calificaciones con /unidad\s*(\d+)/) y a la vez separar las secciones del script,
+  // se guarda «Unidad N · <título de la sección>». Si el script no trae secciones queda solo «Unidad N» (una pantalla).
+  function seccionGuardada(unidad, tituloScript) {
+    var t = String(tituloScript || '').replace(/\s+/g, ' ').trim();
+    if (!t || normalizarTexto(t) === normalizarTexto(unidad)) return unidad;
+    return unidad + ' · ' + t.slice(0, 80);
+  }
+  // ¿Esta pregunta (por su sección guardada) pertenece a esa unidad? «Unidad 1» o «Unidad 1 · algo».
+  function mismaUnidad(seccionPregunta, unidad) {
+    return seccionPregunta === unidad || (typeof seccionPregunta === 'string' && seccionPregunta.indexOf(unidad + ' · ') === 0);
+  }
+
   // Cuántas preguntas nuevas ya existen (mismo texto) entre las ACTIVAS de la materia: sirve para
   // avisar de duplicados cuando se elige "Agregar al final".
   // "seccion" (opcional) limita la comparación a las preguntas de esa unidad.
   function contarDuplicados(nuevas, existentes, seccion) {
     var vistos = {};
-    (existentes || []).forEach(function (q) { if (q.activa && (seccion === undefined || q.seccion === seccion)) vistos[normalizarTexto(q.texto)] = true; });
+    (existentes || []).forEach(function (q) { if (q.activa && (seccion === undefined || mismaUnidad(q.seccion, seccion))) vistos[normalizarTexto(q.texto)] = true; });
     return nuevas.filter(function (p) { return vistos[normalizarTexto(p.texto)]; }).length;
   }
 
@@ -456,20 +470,20 @@
   // "reemplazar" solo desactiva las activas de ESA sección (las demás unidades quedan intactas).
   function subirExamen(api, mid, preguntas, modo, existentes, seccion) {
     var etapa = 'insertar';
-    var activasViejas = (existentes || []).filter(function (q) { return q.activa && (seccion === undefined || q.seccion === seccion); }).map(function (q) { return q.id; });
+    var activasViejas = (existentes || []).filter(function (q) { return q.activa && (seccion === undefined || mismaUnidad(q.seccion, seccion)); }).map(function (q) { return q.id; });
     // Orden de las preguntas nuevas: cada examen (unidad de una materia/tipo) es independiente y su
     // numeración empieza en 1.
     //  - Reemplazar (o primera subida): empieza en 1; las anteriores de la unidad se desactivan.
     //  - Agregar: continúa después del orden más alto de ESA unidad (sin \"seccion\": de la materia).
     var offset = 0;
     if (modo === 'agregar') (existentes || []).forEach(function (q) {
-      if ((seccion === undefined || q.seccion === seccion) && q.orden > offset) offset = q.orden;
+      if ((seccion === undefined || mismaUnidad(q.seccion, seccion)) && q.orden > offset) offset = q.orden;
     });
     var reemplaza = modo === 'reemplazar';
     var filas = preguntas.map(function (p) {
       return {
         texto: p.texto, opciones: p.opciones, correcta: p.correcta, orden: p.orden + offset,
-        activa: !reemplaza, materia_id: mid, seccion: seccion !== undefined ? seccion : (p.seccion || null), contexto: p.contexto || null
+        activa: !reemplaza, materia_id: mid, seccion: seccion !== undefined ? seccionGuardada(seccion, p.seccion) : (p.seccion || null), contexto: p.contexto || null
       };
     });
     var nuevosIds = [];
@@ -515,7 +529,7 @@
     materiaId: '',                            // id de la materia DESTINO en Supabase ('' si todavía no existe)
     existentes: null,                         // preguntas de la materia destino (id, orden, activa, texto, seccion)
     texto: borrador.texto || '', modo: borrador.modo === 'agregar' ? 'agregar' : 'reemplazar',
-    preview: null, avisos: [],
+    preview: null, avisos: [], hoja: 0,       // hoja = sección de la vista previa que se está viendo (0 = la primera)
     ocupado: '', msg: '', err: '', confirmando: false,
     adminAbierto: false, eliminando: null     // sección «Administrar exámenes»: ¿desplegada? y id de la materia por eliminar
   };
@@ -693,7 +707,7 @@
         info = '«' + nombreDestino() + '» todavía no existe en Supabase: se creará activa al subir el examen.';
       } else if (est.existentes) {
         var sec = seccionDestino();
-        var deUnidad = est.existentes.filter(function (q) { return q.seccion === sec; });
+        var deUnidad = est.existentes.filter(function (q) { return mismaUnidad(q.seccion, sec); });
         var act = deUnidad.filter(function (q) { return q.activa; }).length;
         info = '«' + nombreDestino() + '» tiene ' + est.existentes.length + ' pregunta(s); en la ' + sec + ': ' + deUnidad.length + ' (' + act + ' activa(s)).';
       }
@@ -721,7 +735,7 @@
       est.err = ''; est.msg = ''; est.preview = null; est.confirmando = false;
       if (!est.texto.trim()) { est.err = 'Pega el script primero.'; pintar(); return; }
       est.ocupado = 'Analizando...'; pintar();
-      analizarScript(est.texto).then(function (r) { est.preview = r.preguntas; est.avisos = r.avisos; est.ocupado = ''; pintar(); })
+      analizarScript(est.texto).then(function (r) { est.preview = r.preguntas; est.avisos = r.avisos; est.hoja = 0; est.ocupado = ''; pintar(); })
         .catch(function (e) { est.ocupado = ''; est.err = 'No se pudo analizar el script: ' + e.message; pintar(); });
     });
     analizar.disabled = !!est.ocupado;
@@ -735,21 +749,75 @@
     ]);
   }
 
+  // ---- Reproductor de YouTube de la vista previa (misma API y mismos mensajes que FullStatus Student) ----
+  var ytListo = !!(window.YT && window.YT.Player), ytCola = [];
+  function mensajeErrorVideo(c) {
+    if (c === 101 || c === 150) return 'El dueño del video no permite verlo dentro de otras apps (código ' + c + ').';
+    if (c === 100) return 'El video no existe o es privado (código 100).';
+    if (c === 153) return 'YouTube rechazó la configuración del reproductor (código 153).';
+    if (c === 2) return 'El enlace del video no es válido (código 2).';
+    return 'No se pudo reproducir el video (código ' + c + ').';
+  }
+  function cargarApiYoutube() {
+    if (document.getElementById('yt-api-previa') || document.getElementById('yt-api')) return;
+    var previo = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = function () {
+      ytListo = true;
+      if (typeof previo === 'function') { try { previo(); } catch (e) { /* no estorbar */ } }
+      ytCola.splice(0).forEach(function (f) { f(); });
+    };
+    var sc = document.createElement('script');
+    sc.id = 'yt-api-previa'; sc.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(sc);
+  }
+  // Crea el reproductor dentro de "destino" (ya puesto en pantalla). "aviso" recibe el mensaje si algo falla.
+  function montarVideo(destino, idVideo, aviso) {
+    function crear() {
+      if (!document.body.contains(destino)) return; // la pantalla ya cambió
+      var vars = { playsinline: 1, rel: 0 };
+      if (window.location.origin && window.location.origin !== 'null') vars.origin = window.location.origin;
+      new window.YT.Player(destino, { videoId: idVideo, width: '100%', height: '100%', playerVars: vars,
+        events: { onError: function (e) { aviso.textContent = mensajeErrorVideo(e.data); } } });
+    }
+    if (ytListo) { setTimeout(crear, 0); return; }
+    ytCola.push(function () { setTimeout(crear, 0); });
+    cargarApiYoutube();
+    setTimeout(function () { if (!ytListo && document.body.contains(destino)) aviso.textContent = 'No se pudo cargar el reproductor de YouTube. Revisa tu conexión a internet.'; }, 8000);
+  }
+
+  // Agrupa las preguntas en secciones igual que FullStatus Student: cada cambio de sección empieza una hoja.
+  function hojasDePrevia(lista) {
+    var hojas = [];
+    lista.forEach(function (p) {
+      var nombre = p.seccion || null, u = hojas[hojas.length - 1];
+      if (u && u.nombre === nombre) u.preguntas.push(p); else hojas.push({ nombre: nombre, preguntas: [p] });
+    });
+    return hojas;
+  }
+
+  // Vista previa: una HOJA por sección (con Anterior / Siguiente), el video se reproduce y el texto de la
+  // etiqueta es el que verá el alumno. Las respuestas correctas (✓) solo se muestran aquí, al administrador.
   function vistaPrevia() {
     var lista = est.preview;
     var errores = lista.filter(function (p) { return p._error; }).length;
-    var secciones = 0, previa = null;
-    lista.forEach(function (p) { if (p.seccion && p.seccion !== previa) secciones++; previa = p.seccion; });
+    var hojas = hojasDePrevia(lista);
+    if (!(est.hoja >= 0 && est.hoja < hojas.length)) est.hoja = 0;
+    var hoja = hojas[est.hoja];
     var cuerpo = h('div');
-    var secPrev = null, ctxPrev = null;
-    lista.forEach(function (p) {
-      if (p.seccion !== secPrev) {
-        if (p.seccion) cuerpo.appendChild(h('div', { style: 'margin-top:14px;font-weight:700;color:var(--brand-accent)', text: p.seccion }));
-        secPrev = p.seccion; ctxPrev = null;
-      }
+    var unidad = seccionDestino();
+    var etiqueta = seccionGuardada(unidad, hoja.nombre);
+    var ctxPrev = null;
+    hoja.preguntas.forEach(function (p) {
       if (p.contexto && p.contexto !== ctxPrev) {
-        var esVideo = extraerIdYoutube(p.contexto);
-        cuerpo.appendChild(h('div', { 'class': 'helptext', style: 'border-left:3px solid var(--brand-accent);padding-left:10px;white-space:pre-wrap', text: (esVideo ? '▶ Video: ' : 'Texto de apoyo:\n') + p.contexto }));
+        var idVideo = extraerIdYoutube(p.contexto);
+        if (idVideo) {
+          var destino = h('div'), aviso = h('p', { style: 'color:var(--falta);font-size:0.85rem;margin:4px 0 0' });
+          var envoltorio = h('div', { style: 'position:relative;width:100%;max-width:640px;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;margin:12px 0 4px' }, [destino]);
+          cuerpo.appendChild(h('div', {}, [envoltorio, aviso]));
+          montarVideo(destino, idVideo, aviso);
+        } else {
+          cuerpo.appendChild(h('div', { 'class': 'helptext', style: 'border-left:3px solid var(--brand-accent);padding-left:10px;white-space:pre-wrap', text: p.contexto }));
+        }
       }
       ctxPrev = p.contexto;
       var opciones = p._error ? [h('div', { style: 'color:var(--falta)', text: p._error })] : p.opciones.map(function (o, i) {
@@ -757,9 +825,23 @@
       });
       cuerpo.appendChild(h('div', { style: 'padding:8px 0;border-bottom:1px solid var(--line)' }, [h('strong', { text: p.orden + '. ' + (p.texto || '(sin texto)') })].concat(opciones)));
     });
+    function ir(n) { est.hoja = Math.max(0, Math.min(hojas.length - 1, n)); pintar(); }
+    var nav = h('div', { 'class': 'row', style: 'align-items:center;margin:8px 0' });
+    var ant = boton('‹ Anterior', 'secondary', function () { ir(est.hoja - 1); }); ant.disabled = est.hoja === 0;
+    var sig = boton('Siguiente ›', 'secondary', function () { ir(est.hoja + 1); }); sig.disabled = est.hoja === hojas.length - 1;
+    nav.appendChild(ant);
+    hojas.forEach(function (_, i) {
+      var b = boton(String(i + 1), i === est.hoja ? '' : 'secondary', function () { ir(i); });
+      b.title = 'Sección ' + (i + 1) + (hojas[i].nombre ? ': ' + hojas[i].nombre : '');
+      b.style.minWidth = '44px';
+      nav.appendChild(b);
+    });
+    nav.appendChild(sig);
     return h('div', { 'class': 'card' }, [
-      h('h2', { text: lista.length + ' pregunta(s) leída(s) · ' + secciones + ' sección(es)' + (errores ? ' · ' + errores + ' con error' : '') }),
+      h('h2', { text: lista.length + ' pregunta(s) leída(s) · ' + hojas.length + ' sección(es)' + (errores ? ' · ' + errores + ' con error' : '') }),
       est.avisos.length ? h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Correcciones automáticas: ' + est.avisos.join(' ') }) : null,
+      nav,
+      h('div', { style: 'font-weight:700;color:var(--brand-accent);margin:10px 0 0', text: 'Hoja ' + (est.hoja + 1) + ' de ' + hojas.length + (hoja.nombre ? ' · ' + etiqueta : ' · ' + unidad) + '  (' + hoja.preguntas.length + ' pregunta(s))' }),
       cuerpo
     ]);
   }
@@ -767,7 +849,7 @@
   // ¿Esa unidad ya tiene un examen activo? Solo entonces tiene sentido elegir Reemplazar o Agregar.
   function activasDeLaUnidad() {
     var sec = seccionDestino();
-    return (est.existentes || []).filter(function (q) { return q.activa && q.seccion === sec; }).length;
+    return (est.existentes || []).filter(function (q) { return q.activa && mismaUnidad(q.seccion, sec); }).length;
   }
   // Sin examen activo en la unidad no hay qué reemplazar: se sube directo (equivale a Reemplazar).
   function modoEfectivo() { return activasDeLaUnidad() > 0 ? est.modo : 'reemplazar'; }
@@ -790,7 +872,7 @@
     subir.disabled = !puede;
     var partes = [
       h('h2', { text: 'Subir a «' + nombreDestino() + '» · ' + seccionDestino() }),
-      h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Todas las preguntas se guardarán en la ' + seccionDestino() + ' (las secciones del script no se usan como unidad).' }),
+      h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Todas las preguntas se guardarán en la ' + seccionDestino() + ' (las secciones del script se conservan como pantallas separadas: «' + seccionDestino() + ' · título»).' }),
       activasDeLaUnidad() > 0 ? h('p', { 'class': 'helptext', style: 'margin-top:0', text: 'Esta unidad ya tiene ' + activasDeLaUnidad() + ' pregunta(s) activa(s). Elige qué hacer:' }) : null,
       activasDeLaUnidad() > 0 ? opcion('reemplazar', 'Reemplazar el examen de esta unidad (sus preguntas activas actuales se desactivan, no se borran; la numeración empieza en 1; las otras unidades no se tocan)') : null,
       activasDeLaUnidad() > 0 ? opcion('agregar', 'Agregar al final de esta unidad') : null,
@@ -799,7 +881,7 @@
     ];
     if (est.confirmando) {
       var sec = seccionDestino(), existentes = est.existentes || [];
-      var act = existentes.filter(function (q) { return q.activa && q.seccion === sec; }).length;
+      var act = existentes.filter(function (q) { return q.activa && mismaUnidad(q.seccion, sec); }).length;
       var modo = modoEfectivo();
       var dup = modo === 'agregar' ? contarDuplicados(lista, existentes, sec) : 0;
       var resumen = 'Vas a subir ' + lista.length + ' pregunta(s) a «' + nombreDestino() + '» (' + sec + '). '

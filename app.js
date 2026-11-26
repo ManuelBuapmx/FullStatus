@@ -2285,6 +2285,10 @@
   // que reproduce los mismos puntos que ya estaban publicados. Devuelve cuántas unidades y alumnos se repusieron.
   function restaurarGrupoDesdeNube(g, rec){
     var res = {unidades: 0, llenados: 0};
+    if(rec && rec.max_faltas != null && maxFaltasGrupo(g) == null){
+      if(!califDatos[g.id]) califDatos[g.id] = {};
+      califDatos[g.id]._maxFaltas = parseInt(rec.max_faltas, 10);
+    }
     var remotas = (rec && Array.isArray(rec.unidades)) ? rec.unidades : [];
     var califs = (rec && Array.isArray(rec.calificaciones)) ? rec.calificaciones : [];
     if(!Array.isArray(g.unidades)) g.unidades = [];
@@ -2454,6 +2458,15 @@
     if(guardado && CALIF_MODELOS[guardado]) return guardado;
     return /^\s*10(?!\d)/.test(g.nombre) ? "anterior" : "nuevo";
   }
+  // PRISMAL MESH (26/nov/2026): máximo de faltas permitidas por grupo (califDatos[grupoId]._maxFaltas). Se cuenta POR UNIDAD:
+  // si un alumno tiene más faltas que ese máximo en la unidad, queda reprobado aunque su calificación sea aprobatoria.
+  // null = sin límite. La falta cuenta como en el historial: injustificadas + 1 por cada 3 retardos (las justificadas no suman).
+  function maxFaltasGrupo(g){
+    var v = califDatos[g.id] && califDatos[g.id]._maxFaltas;
+    if(v == null || String(v).trim() === "") return null;
+    var n = parseInt(v, 10);
+    return isFinite(n) && n >= 0 ? n : null;
+  }
   // Solo se muestran unidades: si no hay una elegida, se usa la que contiene el día de hoy o la primera.
   function unidadCalifActual(g){
     var unidades = unidadesDelGrupo(g);
@@ -2510,15 +2523,18 @@
       escala[col.campo] = {auto: masAlto, efectiva: manual > 0 ? manual : masAlto};
       cuenta[col.campo] = c.modo === "escala" ? escala[col.campo].efectiva : masAlto;
     });
+    var maxFaltas = maxFaltasGrupo(g);
     var filas = g.estudiantes.map(function(e){
       var d = datos.alumnos[e.id] || {};
-      var presentes = 0, retardos = 0;
+      var presentes = 0, retardos = 0, faltasInj = 0;
       fechas.forEach(function(f){
         var v = leerAsistenciaBucket(g.id, f)[e.id] || "";
         if(v === "P" || (v === "A" && esJustificada(g.id, f, e.id))) presentes++;
         else if(v === "R") retardos++;
+        else if(v === "A") faltasInj++;
       });
       var asist = totalAsistencias(presentes, retardos);
+      var faltas = faltasEquivalentes(faltasInj, retardos);
       var pts = {};
       CALIF_COLUMNAS.forEach(function(col){
         var modo = cfg[col.campo].modo;
@@ -2530,9 +2546,9 @@
       // aplicarOficialesAutomatico (desde la nube) y se quita solo si el profesor escribe algo a mano en esa fila.
       var tieneOficial = !(d.oficial == null || String(d.oficial).trim() === "");
       if(tieneOficial) total = Math.max(0, Math.min(10, numCalif(d.oficial)));
-      return {estudiante:e, asist:asist, total:Math.round(total * 100) / 100, oficial:tieneOficial, pts:{asist:ptsAsist, trab:pts.trab, partic:pts.partic, examen:pts.examen}};
+      return {estudiante:e, asist:asist, faltas:faltas, excedeFaltas:(maxFaltas != null && faltas > maxFaltas), total:Math.round(total * 100) / 100, oficial:tieneOficial, pts:{asist:ptsAsist, trab:pts.trab, partic:pts.partic, examen:pts.examen}};
     });
-    return {unidad:unidad, modeloId:modeloId, modelo:modelo, puntos:puntos, datos:datos, dias:dias, cfg:cfg, escala:escala, cuenta:cuenta, filas:filas};
+    return {unidad:unidad, modeloId:modeloId, modelo:modelo, puntos:puntos, datos:datos, dias:dias, cfg:cfg, escala:escala, cuenta:cuenta, filas:filas, maxFaltas:maxFaltas};
   }
   // Calificación mínima para aprobar según el modelo del grupo: con menos de esto está reprobado.
   var CALIF_MINIMA = {nuevo:7, anterior:8};
@@ -2564,6 +2580,7 @@
           var enEscala = function(campo){ return r.cfg[campo].modo === "escala"; };
           alumnos[i].unidades.push({
             nombre: u.nombre || "",
+            faltas: f.faltas,
             asistencias: r2(f.pts.asist), actividades: r2(f.pts.trab), participaciones: r2(f.pts.partic),
             examen: (vacio(d.examen) && !f.oficial) ? null : r2(f.pts.examen),
             extra: f.oficial ? r2(f.total - (f.pts.asist + f.pts.trab + f.pts.partic + f.pts.examen)) : r2(numExtra(d.extra)),
@@ -2573,7 +2590,7 @@
           });
         });
       });
-      return {id: String(g.id), nombre: g.grupoBase || g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[modeloCalifId(g)], alumnos: alumnos};
+      return {id: String(g.id), nombre: g.grupoBase || g.nombre || "", materia: g.materia || "", minimo: CALIF_MINIMA[modeloCalifId(g)], max_faltas: maxFaltasGrupo(g), alumnos: alumnos};
     })};
   };
   // ---- Examen automático (ver comentario de examAuto) ----
@@ -2812,13 +2829,22 @@
     return examAuto.msg || "No se pudieron consultar los exámenes.";
   }
 
+  function htmlCeldaFaltas(f, max){
+    return '<b'+(f.excedeFaltas ? ' style="color:var(--falta)"' : '')+'>'+f.faltas+'</b>'+(max != null ? ' / '+max : '');
+  }
+  function htmlCeldaTotal(f){
+    return '<b>'+f.total+'</b>'+(f.oficial ? '<sup>●</sup>' : '')
+      + (f.excedeFaltas ? '<div style="color:var(--falta);font-size:.66rem;font-weight:700;line-height:1.1;">Reprobado por faltas</div>' : '');
+  }
   function refrescarTotalesCalif(){
     var g = grupoActivo(); if(!g) return;
     var u = unidadCalifActual(g); if(!u) return;
     var r = calcularCalificaciones(g, u);
     r.filas.forEach(function(f){
       var celda = document.querySelector('[data-calif-total="' + f.estudiante.id + '"]');
-      if(celda){ celda.innerHTML = "<b>" + f.total + "</b>" + (f.oficial ? "<sup>●</sup>" : ""); if(f.oficial) celda.title = "Total oficial de la escuela"; else celda.removeAttribute("title"); }
+      if(celda){ celda.innerHTML = htmlCeldaTotal(f); if(f.oficial) celda.title = "Total oficial de la escuela"; else celda.removeAttribute("title"); }
+      var celdaF = document.querySelector('[data-calif-faltas="' + f.estudiante.id + '"]');
+      if(celdaF) celdaF.innerHTML = htmlCeldaFaltas(f, r.maxFaltas);
     });
     var resumen = {califResAsist:r.dias, califResPartic:r.cuenta.partic, califResTrab:r.cuenta.trab};
     Object.keys(resumen).forEach(function(id){
@@ -2918,8 +2944,8 @@
       // CAMBIO (20/nov/2026): una calificación OFICIAL de la escuela (●) cuenta como ordinario ya cerrado aunque no haya examen
       // capturado en la app; antes esos alumnos reprobados (p. ej. con 6) nunca entraban a la lista de Remedial.
       var ordinarioCerrado = f.oficial || !(d.examen == null || String(d.examen).trim() === "");
-      return ordinarioCerrado && f.total < min;
-    }).map(function(f){ return {est: f.estudiante, previa: f.total}; });
+      return ordinarioCerrado && (f.total < min || f.excedeFaltas);
+    }).map(function(f){ return {est: f.estudiante, previa: f.total, porFaltas: !!f.excedeFaltas && f.total >= min}; });
     var listas = {}, disponibles = [];
     ETAPAS_CALIF.forEach(function(et){
       if(!actual.length) return;
@@ -2950,14 +2976,14 @@
     var lista = et.listas[etapaId] || [];
     var mapa = (r.datos.etapas && r.datos.etapas[etapaId]) || {};
     var h = '<div class="card compacta"><h2>'+esc(etapa.nombre)+' · '+esc(unidad.nombre)+'</h2>';
-    h += '<p class="helptext" style="margin-top:0;">'+lista.length+' alumno(s) con calificación menor a '+min+' en '+esc(previaNombre)+' (mínimo aprobatorio del modelo). Captura su calificación de '+esc(etapa.nombre)+' (0-10); si sigue siendo menor a '+min+', se agrega la siguiente etapa a la lista de arriba.</p>';
+    h += '<p class="helptext" style="margin-top:0;">'+lista.length+' alumno(s) con calificación menor a '+min+' en '+esc(previaNombre)+' (mínimo aprobatorio del modelo)'+(idx === 0 && r.maxFaltas != null ? ' o con más de '+r.maxFaltas+' faltas (máximo del grupo)' : '')+'. Captura su calificación de '+esc(etapa.nombre)+' (0-10); si sigue siendo menor a '+min+', se agrega la siguiente etapa a la lista de arriba.</p>';
     h += '<div class="table-scroll"><table class="matriz calif"><thead><tr><th>Nombre</th><th>'+esc(previaNombre)+'</th><th>'+esc(etapa.nombre)+' (0-10)</th><th>Resultado</th></tr></thead><tbody>';
     lista.forEach(function(x){
       var raw = mapa[x.est.id];
       var capturada = !(raw == null || String(raw).trim() === "");
       var n = capturada ? Math.min(10, numCalif(raw)) : null;
       var res = n == null ? "—" : (n >= min ? '<b style="color:#15803d;">Aprobado</b>' : '<b style="color:var(--falta);">Reprobado</b>');
-      h += '<tr><td style="text-align:left;">'+esc(x.est.nombre)+'</td><td>'+(Math.round(x.previa * 100) / 100)+'</td>'
+      h += '<tr><td style="text-align:left;">'+esc(x.est.nombre)+'</td><td>'+(Math.round(x.previa * 100) / 100)+(x.porFaltas ? ' <small style="color:var(--falta);font-weight:700;">por faltas</small>' : '')+'</td>'
         + '<td><input type="text" inputmode="decimal" class="calif-input" data-calif-etapa="'+etapaId+'" data-estudiante="'+esc(x.est.id)+'" value="'+esc(capturada ? raw : "")+'"></td>'
         + '<td>'+res+'</td></tr>';
     });
@@ -3007,6 +3033,10 @@
     Object.keys(CALIF_MODELOS).forEach(function(id){
       html += '<option value="'+id+'" '+(id===r.modeloId?"selected":"")+'>'+CALIF_MODELOS[id].nombre+'</option>';
     });
+    html += '</select></div>';
+    html += '<div class="field" style="margin-bottom:0;" title="Se cuenta por unidad (injustificadas + 1 por cada 3 retardos). Quien la exceda queda reprobado aunque su calificación apruebe."><label for="selMaxFaltas">Máx. de faltas permitidas</label><select id="selMaxFaltas">';
+    html += '<option value="" '+(r.maxFaltas == null ? "selected" : "")+'>Sin límite</option>';
+    for(var mf = 1; mf <= 40; mf++){ html += '<option value="'+mf+'" '+(r.maxFaltas === mf ? "selected" : "")+'>'+mf+'</option>'; }
     html += '</select></div>';
     html += '<button class="btn" id="btnPublicarCalif" title="Publica las calificaciones de este grupo en Supabase (app del alumno)">☁ Publicar calificaciones</button>';
     html += '<button class="btn secondary" id="btnPdfCalif">Generar PDF</button>';
@@ -3066,6 +3096,7 @@
     html += '<div class="table-scroll"><table class="matriz calif"><thead><tr>';
     html += th("Nombre", CALIF_COLORES.nombre);
     html += th("Asistencias ("+r.puntos.asist+" pto)", CALIF_COLORES.asist, "automático");
+    html += th("Faltas", CALIF_COLORES.nombre, r.maxFaltas == null ? "sin límite" : "máx. "+r.maxFaltas);
     html += th("Exámen ("+r.puntos.examen+" pts)", CALIF_COLORES.examen, modoCorto[r.cfg.examen.modo]);
     html += th("Partic. ("+r.puntos.partic+" pto)", CALIF_COLORES.partic, modoCorto[r.cfg.partic.modo]);
     html += th("Extra (±)", CALIF_COLORES.extra, "puntos");
@@ -3076,12 +3107,13 @@
       var e = f.estudiante, d = r.datos.alumnos[e.id] || {};
       html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+'</td>';
       html += '<td>'+f.asist+' / '+r.dias+'</td>';
+      html += '<td data-calif-faltas="'+esc(e.id)+'">'+htmlCeldaFaltas(f, r.maxFaltas)+'</td>';
       ["examen","partic","extra","trab"].forEach(function(campo){
         var ia = campo === "examen" && autoRes.info[e.id] && r.datos.autoExamen && String(d.examen) === r.datos.autoExamen[e.id] ? autoRes.info[e.id] : null;
         html += '<td><input type="text" inputmode="decimal" data-calif="'+campo+'" data-estudiante="'+esc(e.id)+'" value="'+esc(d[campo] == null ? "" : d[campo])+'" class="calif-input'+(ia ? ' calif-auto' : '')+'"'
           + (ia ? ' title="'+esc('Automático: '+ia.correctas+' / '+ia.total+' en «'+ia.nombre+'»'+(ia.tipo ? ' ('+ia.tipo+')' : '')+'. Si lo escribes a mano ya no se cambia solo.')+'"' : '')+'></td>';
       });
-      html += '<td data-calif-total="'+esc(e.id)+'"'+(f.oficial ? ' title="Total oficial de la escuela"' : '')+'><b>'+f.total+'</b>'+(f.oficial ? '<sup>●</sup>' : '')+'</td></tr>';
+      html += '<td data-calif-total="'+esc(e.id)+'"'+(f.oficial ? ' title="Total oficial de la escuela"' : '')+'>'+htmlCeldaTotal(f)+'</td></tr>';
     });
     html += '</tbody></table></div></div>';
     return html;
@@ -3122,10 +3154,11 @@
     html += chip(CALIF_COLORES.examen, 'Saber '+r.modelo.pesos.saber+'% · Exámen ('+r.puntos.examen+' pts)');
     html += chip(CALIF_COLORES.asist, 'Ser '+r.modelo.pesos.ser+'% · Asistencias ('+r.puntos.asist+' pto) + Participación ('+r.puntos.partic+' pto)');
     html += '</div>';
-    html += '<div class="resumen"><span><b>'+r.dias+'</b> asistencias (días de clase)</span><span><b>'+r.cuenta.partic+'</b> participaciones</span><span><b>'+r.cuenta.trab+'</b> trabajos en clase</span></div>';
+    html += '<div class="resumen"><span><b>'+r.dias+'</b> asistencias (días de clase)</span><span><b>'+r.cuenta.partic+'</b> participaciones</span><span><b>'+r.cuenta.trab+'</b> trabajos en clase</span>'+(r.maxFaltas != null ? '<span>Máximo de faltas permitidas: <b>'+r.maxFaltas+'</b> (por unidad)</span>' : '')+'</div>';
     html += '<table><thead><tr>';
     html += th("Nombre", CALIF_COLORES.nombre);
     html += th("Asistencias ("+r.puntos.asist+" pto)", CALIF_COLORES.asist, "de "+r.dias+" días");
+    html += th("Faltas", CALIF_COLORES.nombre, r.maxFaltas == null ? "sin límite" : "máx. "+r.maxFaltas);
     html += th("Exámen ("+r.puntos.examen+" pts)", CALIF_COLORES.examen, textoModo("examen"));
     html += th("Partic. ("+r.puntos.partic+" pto)", CALIF_COLORES.partic, textoModo("partic"));
     html += th("Extra (±)", CALIF_COLORES.extra, "puntos");
@@ -3135,8 +3168,9 @@
     r.filas.forEach(function(f){
       var d = r.datos.alumnos[f.estudiante.id] || {};
       html += '<tr><td class="n">'+esc(f.estudiante.nombre)+'</td><td>'+f.asist+' / '+r.dias+'</td>';
+      html += '<td'+(f.excedeFaltas ? ' style="color:#b91c1c;font-weight:700"' : '')+'>'+f.faltas+'</td>';
       html += '<td>'+esc(d.examen || "")+'</td><td>'+esc(d.partic || "")+'</td><td>'+esc(d.extra || "")+'</td><td>'+esc(d.trab || "")+'</td>';
-      html += '<td><b>'+f.total+'</b></td></tr>';
+      html += '<td><b>'+f.total+'</b>'+(f.excedeFaltas ? '<br><small style="color:#b91c1c;font-weight:700">Reprobado por faltas</small>' : '')+'</td></tr>';
     });
     html += '</tbody></table>';
     html += '<div class="pie">Generado el '+displayFecha(todayISO())+' a las '+String(hoy.getHours()).padStart(2,"0")+':'+String(hoy.getMinutes()).padStart(2,"0")+' con FullStatus. La asistencia incluye faltas justificadas y la regla de 3 retardos = 1 falta y 2 asistencias.</div>';
@@ -3320,6 +3354,13 @@
       califDatos[g.id]._modelo = selModeloCalif.value;
       guardarCalificaciones(); render();
     });
+    var selMaxFaltas = document.getElementById("selMaxFaltas");
+    if(selMaxFaltas) selMaxFaltas.addEventListener("change", function(){
+      var g = grupoActivo(); if(!g) return;
+      if(!califDatos[g.id]) califDatos[g.id] = {};
+      if(selMaxFaltas.value === "") delete califDatos[g.id]._maxFaltas; else califDatos[g.id]._maxFaltas = parseInt(selMaxFaltas.value, 10);
+      guardarCalificaciones(); render();
+    });
     var btnPdfCalif = document.getElementById("btnPdfCalif");
     if(btnPdfCalif) btnPdfCalif.addEventListener("click", generarPdfCalificaciones);
     var btnPublicarCalif = document.getElementById("btnPublicarCalif");
@@ -3343,10 +3384,10 @@
     if(btnCopiarCalif) btnCopiarCalif.addEventListener("click", function(){
       var g = grupoActivo(); var u = g && unidadCalifActual(g); if(!u) return;
       var r = calcularCalificaciones(g, u);
-      var filas = [["Nombre","Asistencias","Exámen","Partic.","Extra","Trabajos en clase","Total"]];
+      var filas = [["Nombre","Asistencias","Faltas","Exámen","Partic.","Extra","Trabajos en clase","Total","Observación"]];
       r.filas.forEach(function(f){
         var d = r.datos.alumnos[f.estudiante.id] || {};
-        filas.push([f.estudiante.nombre, f.asist, d.examen || "", d.partic || "", d.extra || "", d.trab || "", f.total]);
+        filas.push([f.estudiante.nombre, f.asist, f.faltas, d.examen || "", d.partic || "", d.extra || "", d.trab || "", f.total, f.excedeFaltas ? "Reprobado por faltas" : ""]);
       });
       copiarPortapapeles(filas.map(function(fila){ return fila.join("\t"); }).join("\n"));
     });
