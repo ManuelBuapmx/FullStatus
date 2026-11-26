@@ -142,6 +142,14 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-26 09:39 (hora de México) — Historial: columna "Faltas" por unidad seleccionada
+
+- **Pedido:** en la pestaña Historial y exportar, mostrar el número de faltas de cada alumno en la unidad seleccionada.
+- **`app.js` (`renderHistorial`):** nueva columna **Faltas** a la derecha de "Total presente". Cuenta solo las fechas que muestra la tabla, así que al elegir una unidad en el selector "Unidad" (o un rango Desde/Hasta) el número corresponde a ese periodo; con "Todas las unidades" es el total. Si hay una unidad elegida, su nombre aparece bajo el encabezado.
+- **Regla de conteo:** faltas sin justificar + 1 por cada 3 retardos (`faltasEquivalentes`, la misma regla de siempre). Las faltas justificadas ("J") no cuentan como falta. Así, para cada alumno: Total presente + Faltas = días mostrados.
+- No cambia el modelo de datos, el Excel institucional ni "Copiar para pegar en Excel" (la matriz exportada sigue igual).
+- Verificado con `node --check app.js`; falta probarlo visualmente en Electron y Android. Después de copiar el archivo hay que ejecutar `npm run sync:www`.
+
 ### 2026-11-25 — Examen de prueba de Pedagogía (Unidad 2) y lista de materias de la pestaña Exámenes
 
 - **Pedido:** crear un examen ficticio de 5 preguntas para la Unidad 2 de Pedagogía (materia de prueba con 2 unidades) y que se vea en FullStatus Student y se guarde una calificación real.
