@@ -142,6 +142,12 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-26 — Máximo de faltas por grupo (reprobado por faltas)
+
+- **Pedido:** poner por grupo un máximo de faltas permitidas por unidad; quien lo exceda queda reprobado aunque su calificación sea aprobatoria.
+- **`app.js`:** selector **Máx. de faltas permitidas** en Calificaciones (`califDatos[grupo]._maxFaltas`; vacío = sin límite). El conteo se reinicia en cada unidad (injustificadas + 1 por cada 3 retardos). La tabla, el PDF y «Copiar para pegar en Excel» muestran la columna Faltas y «Reprobado por faltas»; esos alumnos entran a la lista de Remedial, el máximo se publica (`max_faltas`) y se repone desde la nube con `restaurarGrupoDesdeNube`.
+- Este cambio se hizo también en otra sesión (commit `2e861de`, junto con la vista previa de examen paginada con video); se conservó esa versión, que es la más completa, y se descartó la implementación duplicada de esta sesión.
+
 ### 2026-11-26 09:39 (hora de México) — Historial: columna "Faltas" por unidad seleccionada
 
 - **Pedido:** en la pestaña Historial y exportar, mostrar el número de faltas de cada alumno en la unidad seleccionada.
