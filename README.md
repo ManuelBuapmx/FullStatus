@@ -142,6 +142,13 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-26 (noche) — Remedial/Extraordinarios con tope de 8: se continúa el trabajo del otro chat
+
+- **Estado encontrado:** en Supabase ya estaban aplicadas las migraciones `calificaciones_etapa_y_sin_duplicados`, `etapas_publicar_elegibilidad_y_mis_calificaciones` y `mis_materias_solo_las_propias`: tabla `calificaciones_etapa` (calificación publicada con tope = `config.tope_regularizacion`, 8; calificación capturada aparte), `publicar_etapas` que guarda ahí (ya no crea resultados «presentado») y prepara el siguiente examen si alguien no aprueba, `mis_calificaciones` con `etapas` + estado `aprobada_en_etapa`, y el trigger `trg_calif_unidad_una_sola_fila` (0 duplicados de calificaciones; se respaldaron 175 filas en `calificaciones_unidad_respaldo_duplicados`). **No** se había tocado ninguna de las dos apps.
+- **Regla:** remedial y extraordinarios tienen máximo 8, **no sustituyen** la calificación de la unidad; si aprueba en una etapa se muestra «Aprobada en Remedial/Extraordinario N» y el historial de reprobaciones sigue visible.
+- **FullStatus (`app.js`):** la tabla de cada etapa avisa del máximo de 8 (constante `TOPE_REGULARIZACION`, refleja el config del servidor, que es quien lo aplica), marca «(se publica con 8)» si se capturó más y el mensaje al publicar indica el máximo aplicado.
+- **Probado** con una publicación simulada como administrador dentro de una transacción revertida (10 → publica 8; 5 → reprueba y se prepara «Extraordinario 1»; la calificación de la unidad no cambia) y con `node` para la pantalla. No se probó en Electron.
+
 ### 2026-11-26 — Máximo de faltas por grupo (reprobado por faltas)
 
 - **Pedido:** poner por grupo un máximo de faltas permitidas por unidad; quien lo exceda queda reprobado aunque su calificación sea aprobatoria.

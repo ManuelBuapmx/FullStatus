@@ -2928,6 +2928,9 @@
   // Cada etapa solo aparece si hay alumnos que la necesitan: la lista de Remedial son los reprobados del ordinario;
   // la de Extraordinario 1, los que siguen por debajo del mínimo en el Remedial (con calificación ya capturada); y así hasta el 3.
   // Las calificaciones de cada etapa se guardan en la unidad (datos.etapas[etapa][alumno]) y por ahora NO se publican.
+  // PRISMAL MESH (26/nov/2026): calificación máxima del remedial y de los extraordinarios. Refleja config.tope_regularizacion de Supabase
+  // (el servidor es quien la aplica al publicar; esta constante solo la muestra en pantalla).
+  var TOPE_REGULARIZACION = 8;
   var ETAPAS_CALIF = [
     {id:"remedial", nombre:"Remedial"}, {id:"ext1", nombre:"Extraordinario 1"},
     {id:"ext2", nombre:"Extraordinario 2"}, {id:"ext3", nombre:"Extraordinario 3"}
@@ -2983,12 +2986,14 @@
       var capturada = !(raw == null || String(raw).trim() === "");
       var n = capturada ? Math.min(10, numCalif(raw)) : null;
       var res = n == null ? "—" : (n >= min ? '<b style="color:#15803d;">Aprobado</b>' : '<b style="color:var(--falta);">Reprobado</b>');
+      if(n != null && n > TOPE_REGULARIZACION) res += ' <small style="color:#64748b;">(se publica con '+TOPE_REGULARIZACION+')</small>';
       h += '<tr><td style="text-align:left;">'+esc(x.est.nombre)+'</td><td>'+(Math.round(x.previa * 100) / 100)+(x.porFaltas ? ' <small style="color:var(--falta);font-weight:700;">por faltas</small>' : '')+'</td>'
         + '<td><input type="text" inputmode="decimal" class="calif-input" data-calif-etapa="'+etapaId+'" data-estudiante="'+esc(x.est.id)+'" value="'+esc(capturada ? raw : "")+'"></td>'
         + '<td>'+res+'</td></tr>';
     });
     h += '</tbody></table></div>';
     h += '<div class="row" style="margin-top:10px;"><button class="btn" id="btnPublicarEtapa"'+(etapaPublicando ? ' disabled' : '')+'>'+(etapaPublicando ? 'Publicando…' : 'Publicar '+esc(etapa.nombre)+' a los alumnos')+'</button></div>';
+    h += '<p class="helptext" style="margin-top:6px;"><b>Máximo '+TOPE_REGULARIZACION+':</b> el remedial y los extraordinarios se publican con una calificación máxima de '+TOPE_REGULARIZACION+' y <b>no sustituyen</b> la calificación de la unidad; el alumno ve que aprobó en esta etapa y su historial de reprobaciones.</p>';
     h += '<p class="helptext" style="margin-top:6px;">Los alumnos que aprobaron ven su calificación de '+esc(etapa.nombre)+' en FullStatus Student; a los que no, se les muestra el siguiente examen con el botón inactivo hasta que lo abras.</p>';
     if(etapaPubMsg) h += '<p class="helptext" style="white-space:pre-line;">'+esc(etapaPubMsg)+'</p>';
     h += '</div>';
@@ -3234,6 +3239,7 @@
           etapaPubMsg = "Inicia sesión en ☁ Alumnos (administrador) para publicar.";
         } else {
           var m = "Listo: " + res.registros + " calificación(es) de " + nombreEtapa + " publicada(s) en " + u2.nombre + " (" + res.aprobados + " aprobaron, " + res.reprobados + " no).";
+          if(res.tope != null) m += " Máximo publicado: " + res.tope + " (no sustituye la calificación de la unidad).";
           if(res.sin_match && res.sin_match.length) m += "\nSin alumno en Supabase (no se publicaron): " + res.sin_match.join(", ") + ".";
           if(res.ambiguos && res.ambiguos.length) m += "\nNombre ambiguo (no se publicaron): " + res.ambiguos.join(", ") + ".";
           if(res.sin_materia && res.sin_materia.length) m += "\nEl grupo no tiene materia: no se pudo publicar.";
