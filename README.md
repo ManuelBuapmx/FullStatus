@@ -142,6 +142,14 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 
 ## Historial de cambios
 
+### 2026-11-26 22:55 — Historial: remedial por faltas según el número de unidades
+
+- **Pedido:** en la pestaña Historial, marcar a los alumnos que van a remedial por faltas: grupo con **4 unidades** → **3 faltas o más**; con **3 unidades** → **4 o más**; con **2 unidades** → **5 o más**.
+- **`app.js`:** `REMEDIAL_FALTAS_POR_UNIDADES`, `umbralRemedialFaltas(g)` y `faltasTotalesAlumno(g, estId)`. El número de unidades es el de "Unidades y periodos" del grupo (`unidadesDelGrupo`). Las faltas se cuentan en **todo el registro** del grupo (aunque haya filtro de unidad o fechas): injustificadas + 1 por cada 3 retardos; las justificadas ("J") no suman. Si el grupo no tiene 2, 3 o 4 unidades definidas no se marca a nadie y se muestra un aviso.
+- **En pantalla:** la fila del alumno se resalta con la etiqueta "Remedial" (con el detalle en el tooltip del nombre), el resumen muestra cuántos alumnos van a remedial por faltas y debajo de la leyenda se explica la regla. La columna "Faltas" sigue mostrando las faltas de las fechas visibles; la marca usa siempre el total.
+- **No cambia:** datos, claves de almacenamiento, Excel institucional, "Copiar para pegar en Excel" ni la publicación a Supabase. Es independiente del selector "Máx. de faltas permitidas" de Calificaciones (que cuenta por unidad y reprueba la unidad).
+- **Probado** con jsdom sobre el `index.html` real (grupos de 4, 3, 2 y 1 unidades; faltas justificadas y retardos). No se probó en Electron.
+
 ### 2026-11-26 (noche) — Remedial/Extraordinarios con tope de 8: se continúa el trabajo del otro chat
 
 - **Estado encontrado:** en Supabase ya estaban aplicadas las migraciones `calificaciones_etapa_y_sin_duplicados`, `etapas_publicar_elegibilidad_y_mis_calificaciones` y `mis_materias_solo_las_propias`: tabla `calificaciones_etapa` (calificación publicada con tope = `config.tope_regularizacion`, 8; calificación capturada aparte), `publicar_etapas` que guarda ahí (ya no crea resultados «presentado») y prepara el siguiente examen si alguien no aprueba, `mis_calificaciones` con `etapas` + estado `aprobada_en_etapa`, y el trigger `trg_calif_unidad_una_sola_fila` (0 duplicados de calificaciones; se respaldaron 175 filas en `calificaciones_unidad_respaldo_duplicados`). **No** se había tocado ninguna de las dos apps.
@@ -428,6 +436,8 @@ Reglas: ver "Reglas de conteo (totales)". Una falta justificada cuenta como asis
 - Los grupos nuevos generan su pestaña clonando la hoja "Plantilla".
 
 ## Pendientes conocidos
+
+- Extraordinarios por unidades reprobadas: el alumno presentaría de golpe un examen por cada unidad reprobada y la calificación sería el promedio (con tope de 8). Hoy el sistema los trata como una cadena Extraordinario 1 → 2 → 3 por unidad. Pendiente de confirmar si el promedio reemplaza la calificación final de la materia; requiere cambios en `publicar_etapas` (Supabase).
 
 - Exámenes: probar en Electron con Supabase real (materia «Inglés XI» vs «ENGLISH XI», unidad y tipo). Si FullStatus Student debe mostrar los exámenes Remedial/Extraordinario como parte de la misma materia en vez de materias aparte, habría que agregar una columna `tipo_examen` y adaptar la app del alumno.
 - Escuelas: falta un botón "Cambiar archivo de Drive" (editar el enlace sin perder grupos; hoy hay que quitar y volver a agregar la escuela, lo que borra sus datos locales) y una protección que impida borrar pestañas cuando el Excel de la escuela no tiene `Plantilla`.

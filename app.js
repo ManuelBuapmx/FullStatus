@@ -342,6 +342,21 @@
   }
   // Regla de retardos: cada 3 retardos de un alumno = 1 falta (injustificada) y 2 asistencias.
   function faltasEquivalentes(faltas, retardos){ return faltas + Math.floor(retardos / 3); }
+  // PRISMAL MESH (26/nov/2026): remedial por faltas en el Historial. El límite depende de cuántas unidades tiene el grupo
+  // (las que se definen en "Unidades y periodos"): 4 unidades -> 3 faltas o más, 3 unidades -> 4 o más, 2 unidades -> 5 o más.
+  // Con otro número de unidades no se marca a nadie. Solo es una marca en pantalla: no cambia los datos ni el Excel.
+  var REMEDIAL_FALTAS_POR_UNIDADES = {4:3, 3:4, 2:5};
+  function umbralRemedialFaltas(g){ return REMEDIAL_FALTAS_POR_UNIDADES[unidadesDelGrupo(g).length] || null; }
+  // Faltas de un alumno en TODO el registro del grupo (no solo las fechas filtradas): injustificadas + 1 por cada 3 retardos.
+  function faltasTotalesAlumno(g, estId){
+    var a = 0, r = 0;
+    fechasDelGrupo(g.id).forEach(function(f){
+      var v = leerAsistenciaBucket(g.id, f)[estId] || "";
+      if(v === "A" && !esJustificada(g.id, f, estId)) a++;
+      else if(v === "R") r++;
+    });
+    return faltasEquivalentes(a, r);
+  }
   // Total de asistencias de un alumno. "presentes" ya incluye las faltas justificadas.
   // Cada retardo cuenta como asistencia normal mientras no se complete el tercero;
   // por cada grupo de 3 retardos, uno de los tres días pasa a ser falta
@@ -993,6 +1008,7 @@
     var todasFechas = fechasDelGrupo(g.id);
     var fechas = fechasFiltradas(g, todasFechas);
     var unidades = unidadesDelGrupo(g);
+    var umbralRem = umbralRemedialFaltas(g);
 
     var html = '<div class="card">';
     html += '<div class="hist-head"><div><div class="eyebrow">Consulta de asistencia</div><h2>Historial de '+esc(g.nombre)+'</h2></div>';
@@ -1004,6 +1020,10 @@
     html += '<div class="hist-summary">';
     var unidadSel = histUnidad ? unidades.find(function(u){ return u.id === histUnidad; }) : null;
     html += '<div><strong>'+fechas.length+'</strong><span> '+(unidadSel ? 'días en '+esc(unidadSel.nombre) : 'días registrados')+'</span></div>';
+    if(umbralRem !== null){
+      var enRemedialTotal = g.estudiantes.filter(function(e){ return faltasTotalesAlumno(g, e.id) >= umbralRem; }).length;
+      html += '<div><strong'+(enRemedialTotal>0?' style="color:var(--falta)"':'')+'>'+enRemedialTotal+'</strong><span> en remedial por faltas</span></div>';
+    }
     html += '</div>';
     html += '<div class="hist-toolbar">';
     html += '<div class="field" style="margin-bottom:0;"><label for="selUnidadHistorial">Unidad</label><select id="selUnidadHistorial"'+(unidades.length?'':' disabled')+'><option value="">'+(unidades.length?'Todas las unidades':'Sin unidades definidas')+'</option>';
@@ -1017,6 +1037,9 @@
     html += "</div>";
     html += '<div class="hist-legend"><span><b class="legend-P">1</b> Asistencia</span><span><b class="legend-A">0</b> Falta</span><span><b class="legend-R">2</b> Retardo</span><span><b class="legend-J">J</b> Falta justificada</span></div>';
     html += '<p class="helptext hist-rule">Cada 3 retardos de un alumno equivalen a 1 falta y 2 asistencias; con 1 o 2 retardos siguen contando como asistencias. La falta justificada ("J") cuenta como asistencia. Toca una falta ("0") en la tabla para marcarla como justificada.</p>';
+    html += '<p class="helptext hist-rule">'+(umbralRem !== null
+      ? '<b>Remedial por faltas:</b> este grupo tiene '+unidades.length+' unidades, así que va a remedial quien llegue a <b>'+umbralRem+' faltas o más</b> en todo el registro (2 unidades: 5; 3 unidades: 4; 4 unidades: 3). Se cuentan las faltas sin justificar y 1 por cada 3 retardos.'
+      : '<b>Remedial por faltas:</b> define 2, 3 o 4 unidades del grupo en "Unidades y periodos" (más abajo) para marcar a quien le toca remedial (2 unidades: 5 faltas; 3: 4; 4: 3).')+'</p>';
 
     if(fechas.length === 0 || g.estudiantes.length === 0){
       html += '<p class="empty">Todavía no hay registros de asistencia'+(fechas.length===0?" en este rango de fechas":"")+'.</p></div>';
@@ -1062,7 +1085,9 @@
     // Faltas del periodo visible: si hay una unidad seleccionada (o un rango de fechas), solo cuenta esas fechas.
     html += '<th title="Faltas en las fechas mostradas (incluye 1 falta por cada 3 retardos)">Faltas'+(unidadSel?'<small class="unidad-etiqueta">'+esc(unidadSel.nombre)+'</small>':'')+"</th></tr></thead><tbody>";
     estudiantesVista.forEach(function(e){
-      html += '<tr><td title="'+esc(e.nombre)+'">'+esc(e.nombre)+"</td>";
+      var faltasTot = umbralRem !== null ? faltasTotalesAlumno(g, e.id) : 0;
+      var enRemedial = umbralRem !== null && faltasTot >= umbralRem;
+      html += '<tr'+(enRemedial?' class="fila-remedial"':'')+'><td title="'+esc(e.nombre)+(enRemedial?' — Remedial por faltas: '+faltasTot+' en total (límite '+umbralRem+')':'')+'">'+esc(e.nombre)+(enRemedial?' <span class="etiqueta-remedial">Remedial</span>':'')+"</td>";
       if(matVisible) html += '<td class="helptext" style="white-space:nowrap;">'+celdaMatriculaHtml(cacheMat, e)+'</td>';
       var totalP = 0, totalR = 0, totalA = 0;
       var unidadPreviaFila = null;

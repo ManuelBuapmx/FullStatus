@@ -257,3 +257,7 @@ ul.escuelas .escuela-entrar{flex:1 1 220px;text-align:left;font-weight:600;}
 .btn-escuela:hover{border-color:var(--brand-accent);}
 
 .calif-input.calif-auto{background:#f0fdf4;border-color:#86efac;}
+
+/* --- Historial: alumnos que van a remedial por faltas --- */
+table.matriz tr.fila-remedial td, table.matriz tr.fila-remedial td:first-child{background:#fef2f2;}
+.etiqueta-remedial{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--falta);color:#fff;font-size:.66rem;font-weight:700;vertical-align:middle;}
